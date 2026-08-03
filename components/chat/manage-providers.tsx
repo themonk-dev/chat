@@ -261,7 +261,12 @@ export function ManageProviders() {
         </PopoverTrigger>
 
         <PopoverContent align="start" className="w-72 p-2">
-          <div className="flex flex-col gap-0.5">
+          {/*
+           * Seven rows plus the note below is roughly the height of a short
+           * laptop window, so the list scrolls rather than the popover growing
+           * past the viewport and taking the note with it.
+           */}
+          <div className="flex max-h-[min(60vh,22rem)] flex-col gap-0.5 overflow-y-auto">
             {PROVIDER_ORDER.map((id) => (
               <ManageProvidersRow
                 connected={connectedIds.has(id)}
@@ -272,6 +277,24 @@ export function ManageProviders() {
               />
             ))}
           </div>
+
+          {/*
+           * Sits under the list rather than in the dialog because this is where
+           * the reader is deciding whether to hand over an account — the claim
+           * is worth reading before the sign-in starts, not during it.
+           */}
+          <p className="mt-2 border-border/50 border-t px-2 pt-2 text-[11px] text-muted-foreground leading-relaxed">
+            Tokens stay in this tab and are gone when you close it. Sign-in by{" "}
+            <a
+              className="underline underline-offset-2 transition-colors hover:text-foreground"
+              href="https://ai-oauth.themonk.dev"
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              ai-oauth-sdk
+            </a>
+            .
+          </p>
         </PopoverContent>
       </Popover>
 
