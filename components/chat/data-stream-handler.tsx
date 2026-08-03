@@ -1,29 +1,23 @@
 "use client";
 
 import { useEffect } from "react";
-import { useSWRConfig } from "swr";
-import { unstable_serialize } from "swr/infinite";
 import { useDataStream } from "./data-stream-provider";
-import { getChatHistoryPaginationKey } from "./sidebar-history";
 
+/**
+ * Chat titles are no longer server-generated, so there is nothing left here to
+ * revalidate a sidebar cache for — `useChats()` refreshes itself when a thread
+ * is written. This just drains the stream buffer.
+ */
 export function DataStreamHandler() {
   const { dataStream, setDataStream } = useDataStream();
-  const { mutate } = useSWRConfig();
 
   useEffect(() => {
     if (!dataStream?.length) {
       return;
     }
 
-    const newDeltas = dataStream.slice();
     setDataStream([]);
-
-    for (const delta of newDeltas) {
-      if (delta.type === "data-chat-title") {
-        mutate(unstable_serialize(getChatHistoryPaginationKey));
-      }
-    }
-  }, [dataStream, setDataStream, mutate]);
+  }, [dataStream, setDataStream]);
 
   return null;
 }

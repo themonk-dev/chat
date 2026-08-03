@@ -18,6 +18,7 @@ import {
 import { useDataStream } from "@/components/chat/data-stream-provider";
 import { toast } from "@/components/chat/toast";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { readChat, writeChat } from "@/lib/chats/store";
 import { ChatbotError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
 import { fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
@@ -69,7 +70,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
 
   const [input, setInput] = useState("");
 
-  const initialMessages: ChatMessage[] = [];
+  const initialMessages: ChatMessage[] = readChat(chatId)?.messages ?? [];
 
   const {
     messages,
@@ -175,6 +176,22 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       });
     }
   }, [sendMessage, chatId]);
+
+  useEffect(() => {
+    if (status !== "ready" || messages.length === 0) {
+      return;
+    }
+
+    const first = messages.find((message) => message.role === "user");
+    const title =
+      first?.parts
+        ?.filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("")
+        .slice(0, 60) || "New chat";
+
+    writeChat({ id: chatId, messages, title, updatedAt: Date.now() });
+  }, [chatId, messages, status]);
 
   const value = useMemo<ActiveChatContextValue>(
     () => ({

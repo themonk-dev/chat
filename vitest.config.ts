@@ -4,7 +4,5 @@ export default defineConfig({
   resolve: {
     alias: { "@": new URL(".", import.meta.url).pathname },
   },
-  test: {
-    environment: "node",
-  },
+  test: { environment: "jsdom", setupFiles: [] },
 });

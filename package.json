@@ -69,6 +69,7 @@
     "@types/react-dom": "^18",
     "babel-plugin-react-compiler": "^1.0.0",
     "husky": "^9.1.7",
+    "jsdom": "^30.0.1",
     "lint-staged": "^16.4.0",
     "postcss": "^8",
     "tailwindcss": "^4.3.2",

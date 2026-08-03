@@ -43,6 +43,7 @@ import {
   DEFAULT_CHAT_MODEL,
   type ModelCapabilities,
 } from "@/lib/ai/models";
+import { deleteChat, listChats } from "@/lib/chats/store";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
@@ -186,10 +187,7 @@ function PureMultimodalInput({
             action: {
               label: "Delete",
               onClick: () => {
-                fetch(
-                  `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/chat?id=${chatId}`,
-                  { method: "DELETE" }
-                );
+                deleteChat(chatId);
                 router.push("/");
                 toast.success("Chat deleted");
               },
@@ -201,12 +199,9 @@ function PureMultimodalInput({
             action: {
               label: "Delete all",
               onClick: () => {
-                fetch(
-                  `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/history`,
-                  {
-                    method: "DELETE",
-                  }
-                );
+                for (const chat of listChats()) {
+                  deleteChat(chat.id);
+                }
                 router.push("/");
                 toast.success("All chats deleted");
               },
