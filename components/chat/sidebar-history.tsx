@@ -113,7 +113,7 @@ export function SidebarHistory() {
     isValidating,
     isLoading,
     mutate,
-  } = useSWRInfinite<ChatHistory>(getChatHistoryPaginationKey, fetcher, {
+  } = useSWRInfinite<ChatHistory>(() => null, fetcher, {
     fallbackData: [],
     revalidateOnFocus: false,
   });

@@ -9,7 +9,6 @@ import { resolveTarget, withQuery } from "@/lib/oauth/targets";
  * one line is why the playground lives on Vercel rather than on Workers.
  */
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
 type RouteParams = { id: string; kind: string; path?: string[] };
 
