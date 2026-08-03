@@ -4,8 +4,7 @@ import { PanelLeftIcon } from "lucide-react";
 import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
-import { AuthenticateButton } from "./authenticate-button";
-import { ProviderSelector } from "./provider-selector";
+import { ManageProviders } from "./manage-providers";
 
 function PureChatHeader() {
   const { toggleSidebar } = useSidebar();
@@ -21,9 +20,7 @@ function PureChatHeader() {
         <PanelLeftIcon className="size-4" />
       </Button>
 
-      <ProviderSelector />
-
-      <AuthenticateButton />
+      <ManageProviders />
     </header>
   );
 }

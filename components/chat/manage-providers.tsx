@@ -1,0 +1,248 @@
+"use client";
+
+import { LogOutIcon } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { useProviderAuth } from "@/hooks/use-provider-auth";
+import { PROVIDER_ORDER, registry } from "@/lib/oauth/registry";
+import { clientFor } from "@/lib/oauth/storage";
+import { cn } from "@/lib/utils";
+import { AuthDialog } from "./auth-dialog";
+import { ChevronDownIcon } from "./icons";
+import { providerLogos } from "./provider-logos";
+
+/** Snapshots which providers hold a token right now, straight from storage. */
+async function fetchConnectedIds(): Promise<Set<string>> {
+  const results = await Promise.all(
+    PROVIDER_ORDER.map(async (id) => {
+      const tokens = await clientFor(id)
+        .getTokens()
+        .catch(() => undefined);
+      return [id, Boolean(tokens?.accessToken)] as const;
+    })
+  );
+
+  return new Set(
+    results.filter(([, connected]) => connected).map(([id]) => id)
+  );
+}
+
+/**
+ * Which providers already hold a token, independent of which one is active.
+ *
+ * `useProviderAuth` only tracks the active provider's connection, so the rest
+ * are snapshotted straight from storage: once on mount, so the trigger's
+ * count is accurate before the popover has ever been opened, and again every
+ * time the popover opens, so a connect or disconnect that happened while it
+ * was closed is reflected rather than assumed.
+ */
+function useConnectedProviders(open: boolean) {
+  const [connectedIds, setConnectedIds] = useState<Set<string>>(new Set());
+  const { activeId, isConnected } = useProviderAuth();
+
+  useEffect(() => {
+    setConnectedIds((previous) => {
+      const next = new Set(previous);
+      if (isConnected) {
+        next.add(activeId);
+      } else {
+        next.delete(activeId);
+      }
+      return next;
+    });
+  }, [activeId, isConnected]);
+
+  const refresh = useCallback(() => {
+    let cancelled = false;
+
+    fetchConnectedIds().then((ids) => {
+      if (!cancelled) {
+        setConnectedIds(ids);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => refresh(), [refresh]);
+
+  useEffect(() => {
+    if (open) {
+      return refresh();
+    }
+  }, [open, refresh]);
+
+  return [connectedIds, setConnectedIds] as const;
+}
+
+function ManageProvidersRow({
+  connected,
+  id,
+  onConnect,
+  onDisconnect,
+}: {
+  connected: boolean;
+  id: string;
+  onConnect: (id: string) => void;
+  onDisconnect: (id: string) => void;
+}) {
+  const { label } = registry[id];
+  const Logo = providerLogos[id];
+
+  const handleConnect = useCallback(() => {
+    onConnect(id);
+  }, [id, onConnect]);
+
+  const handleDisconnect = useCallback(() => {
+    onDisconnect(id);
+  }, [id, onDisconnect]);
+
+  return (
+    <div
+      className="flex items-center gap-2.5 rounded-lg px-2 py-1.5"
+      data-testid={`manage-providers-row-${id}`}
+    >
+      {Logo ? <Logo className="size-4 shrink-0" /> : null}
+      <span className="flex-1 truncate text-sm">{label}</span>
+      {connected ? (
+        <>
+          <span className="flex items-center gap-1.5 text-muted-foreground text-xs">
+            <span
+              aria-hidden
+              className="size-1.5 shrink-0 rounded-full bg-emerald-500"
+            />
+            Connected
+          </span>
+          <Button
+            aria-label={`Disconnect ${label}`}
+            data-testid={`manage-providers-disconnect-${id}`}
+            onClick={handleDisconnect}
+            size="icon-sm"
+            variant="ghost"
+          >
+            <LogOutIcon className="size-4" />
+          </Button>
+        </>
+      ) : (
+        <Button
+          data-testid={`manage-providers-connect-${id}`}
+          onClick={handleConnect}
+          size="sm"
+          variant="outline"
+        >
+          Connect
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Replaces the old provider dropdown + Authenticate button with a single
+ * connection manager: one popover listing every provider, each row offering
+ * to connect or disconnect independently of which provider is active.
+ *
+ * The active provider is special only because `useProviderAuth` and
+ * `AuthDialog` are both scoped to it: disconnecting the active provider goes
+ * through the hook's own `disconnect()` so its `isConnected` stays in sync
+ * (calling storage directly would clear tokens while leaving that state
+ * stale), and connecting a non-active provider first switches `activeId` so
+ * `AuthDialog` — which always renders the active provider's flow — shows the
+ * right one. The popover closes when the dialog opens so the two Radix
+ * layers never fight over dismiss/focus handling.
+ */
+export function ManageProviders() {
+  const [open, setOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const { activeId, disconnect, setActiveId } = useProviderAuth();
+  const [connectedIds, setConnectedIds] = useConnectedProviders(open);
+
+  const handleConnect = useCallback(
+    (id: string) => {
+      if (id !== activeId) {
+        setActiveId(id);
+      }
+      setOpen(false);
+      setDialogOpen(true);
+    },
+    [activeId, setActiveId]
+  );
+
+  const handleDisconnect = useCallback(
+    (id: string) => {
+      if (id === activeId) {
+        disconnect();
+        return;
+      }
+
+      setConnectedIds((previous) => {
+        const next = new Set(previous);
+        next.delete(id);
+        return next;
+      });
+
+      clientFor(id)
+        .logout()
+        .catch(() => {
+          // Local state is already cleared above; nothing left to do.
+        });
+    },
+    [activeId, disconnect, setConnectedIds]
+  );
+
+  const connectedCount = connectedIds.size;
+
+  return (
+    <>
+      <Popover onOpenChange={setOpen} open={open}>
+        <PopoverTrigger asChild>
+          <Button
+            className="gap-1.5 rounded-lg border-border/50 text-muted-foreground shadow-none transition-colors hover:text-foreground focus-visible:border-border/50 focus-visible:ring-0 active:translate-y-0"
+            data-testid="manage-providers-trigger"
+            size="sm"
+            variant="outline"
+          >
+            <span
+              aria-hidden
+              className={cn(
+                "size-1.5 shrink-0 rounded-full",
+                connectedCount > 0 ? "bg-emerald-500" : "bg-border"
+              )}
+            />
+            {connectedCount > 0
+              ? `${connectedCount} connected`
+              : "Not connected"}
+            <ChevronDownIcon />
+          </Button>
+        </PopoverTrigger>
+
+        <PopoverContent align="start" className="w-72 p-2">
+          <div className="flex flex-col gap-0.5">
+            {PROVIDER_ORDER.map((id) => (
+              <ManageProvidersRow
+                connected={connectedIds.has(id)}
+                id={id}
+                key={id}
+                onConnect={handleConnect}
+                onDisconnect={handleDisconnect}
+              />
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
+
+      <AuthDialog
+        key={activeId}
+        onOpenChange={setDialogOpen}
+        open={dialogOpen}
+      />
+    </>
+  );
+}
