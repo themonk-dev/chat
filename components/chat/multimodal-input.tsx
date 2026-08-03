@@ -37,6 +37,7 @@ import {
   ModelSelectorName,
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector";
+import { useProviderAuth } from "@/hooks/use-provider-auth";
 import {
   type ChatModel,
   chatModels,
@@ -109,6 +110,7 @@ function PureMultimodalInput({
   isLoading?: boolean;
 }) {
   const router = useRouter();
+  const { isConnected } = useProviderAuth();
   const { setTheme, resolvedTheme } = useTheme();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
@@ -392,20 +394,31 @@ function PureMultimodalInput({
           {status === "submitted" ? (
             <StopButton setMessages={setMessages} stop={stop} />
           ) : (
-            <PromptInputSubmit
-              className={cn(
-                "h-7 w-7 rounded-xl transition-all duration-200",
-                input.trim()
-                  ? "bg-foreground text-background hover:opacity-85 active:scale-95"
-                  : "bg-muted text-muted-foreground/25 cursor-not-allowed"
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <PromptInputSubmit
+                    className={cn(
+                      "h-7 w-7 rounded-xl transition-all duration-200",
+                      input.trim() && isConnected
+                        ? "bg-foreground text-background hover:opacity-85 active:scale-95"
+                        : "bg-muted text-muted-foreground/25 cursor-not-allowed"
+                    )}
+                    data-testid="send-button"
+                    disabled={!(input.trim() && isConnected)}
+                    status={status}
+                    variant="secondary"
+                  >
+                    <ArrowUpIcon className="size-4" />
+                  </PromptInputSubmit>
+                </span>
+              </TooltipTrigger>
+              {isConnected ? null : (
+                <TooltipContent side="top">
+                  Connect a provider to send a message
+                </TooltipContent>
               )}
-              data-testid="send-button"
-              disabled={!input.trim()}
-              status={status}
-              variant="secondary"
-            >
-              <ArrowUpIcon className="size-4" />
-            </PromptInputSubmit>
+            </Tooltip>
           )}
         </PromptInputFooter>
       </PromptInput>
