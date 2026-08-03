@@ -2,7 +2,6 @@
 
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
 import { usePathname } from "next/navigation";
 import {
   createContext,
@@ -18,11 +17,13 @@ import {
 } from "react";
 import { useDataStream } from "@/components/chat/data-stream-provider";
 import { toast } from "@/components/chat/toast";
+import { useProviderAuth } from "@/hooks/use-provider-auth";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import { deleteChat, readChat, writeChat } from "@/lib/chats/store";
 import { ChatbotError } from "@/lib/errors";
+import { OAuthChatTransport } from "@/lib/oauth/transport";
 import type { ChatMessage } from "@/lib/types";
-import { fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
+import { generateUUID } from "@/lib/utils";
 
 type ActiveChatContextValue = {
   chatId: string;
@@ -181,6 +182,16 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
     currentModelIdRef.current = currentModelId;
   }, [currentModelId]);
 
+  const { activeId, tokens } = useProviderAuth();
+  const activeIdRef = useRef(activeId);
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+  const tokensRef = useRef(tokens);
+  useEffect(() => {
+    tokensRef.current = tokens;
+  }, [tokens]);
+
   const [input, setInput] = useState("");
 
   const initialMessages: ChatMessage[] = readChat(chatId)?.messages ?? [];
@@ -226,34 +237,11 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
         ) ?? false
       );
     },
-    transport: new DefaultChatTransport({
-      api: `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/chat`,
-      fetch: fetchWithErrorHandlers,
-      prepareSendMessagesRequest(request) {
-        const lastMessage = request.messages.at(-1);
-        const isToolApprovalContinuation =
-          lastMessage?.role !== "user" ||
-          request.messages.some((msg) =>
-            msg.parts?.some((part) => {
-              const { state } = part as { state?: string };
-              return (
-                state === "approval-responded" || state === "output-denied"
-              );
-            })
-          );
-
-        return {
-          body: {
-            id: request.id,
-            ...(isToolApprovalContinuation
-              ? { messages: request.messages }
-              : { message: lastMessage }),
-            selectedChatModel: currentModelIdRef.current,
-            ...request.body,
-          },
-        };
-      },
-    }),
+    transport: new OAuthChatTransport(() => ({
+      accessToken: tokensRef.current?.accessToken,
+      modelId: currentModelIdRef.current,
+      providerId: activeIdRef.current,
+    })),
   });
 
   useEffect(() => {
