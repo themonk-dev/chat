@@ -49,14 +49,25 @@ function extractChatId(pathname: string): string | null {
 }
 
 /**
- * A cheap fingerprint of a transcript: the sequence of message ids. Every
- * message that is sent, edited-and-regenerated, or newly loaded gets a fresh
- * id (`generateId: generateUUID` above), so two transcripts with the same
- * ids in the same order are the same content — without comparing the actual
- * text, which would mean deep-comparing a long thread on every render.
+ * The transcript exactly as it would be stored. Nothing cheaper is safe:
+ * every abbreviation tried here has been a bug. A message count misses a
+ * change that keeps the length (clear-then-send, edit-and-regenerate); a
+ * sequence of message ids misses a change that keeps the ids, which is what
+ * `addToolApprovalResponse` does — it rewrites the last message's `parts` in
+ * place via `replaceMessage(messages.length - 1, { ...lastMessage, parts })`,
+ * so denying a tool call produces an identical id sequence of identical
+ * length and only the part's `state`/`approval` differ.
+ *
+ * `JSON.stringify` is the right comparison specifically because it is what
+ * `writeChat` serialises with: two transcripts with the same signature would
+ * produce the same bytes in `localStorage`, so skipping the write is exactly
+ * a no-op, and anything that would change those bytes is seen. Stored
+ * messages come back through `JSON.parse` of that same text, so key order —
+ * which `JSON.stringify` preserves from insertion order — round-trips
+ * faithfully and merely opening a thread still compares equal.
  */
-function messageSignature(messages: { id: string }[]): string {
-  return messages.map((message) => message.id).join("|");
+function transcriptSignature(messages: readonly unknown[]): string {
+  return JSON.stringify(messages);
 }
 
 /**
@@ -70,12 +81,16 @@ function messageSignature(messages: { id: string }[]): string {
  * differing count, which makes it nasty to notice.
  *
  * Comparing the live transcript against what is actually stored for this
- * thread has no state to desynchronise: it is correct for opening a thread
- * (ids match what was just loaded from the same place), correct for a
- * genuine send or a completed reply (a new id appears), and correct for
- * "the count happens to coincide" cases like clear-then-send or
- * edit-and-regenerate (the trailing id is still new, even when the count
- * is not).
+ * thread has no state to desynchronise, and comparing its *content* rather
+ * than its shape leaves nothing for a change to hide behind: it is correct
+ * for opening a thread (the bytes match what was just loaded from the same
+ * place), for a genuine send or completed reply, for the same-count cases,
+ * and for an in-place rewrite such as a denied tool approval.
+ *
+ * The cost is a full serialisation of the thread, which is affordable
+ * because of where this sits: the `status !== "ready"` gate above rejects
+ * every render during streaming, and `messages` is unrelated to the input
+ * textbox, so this runs once per settled turn — not per keystroke.
  */
 export function shouldPersistChat({
   status,
@@ -83,14 +98,26 @@ export function shouldPersistChat({
   storedMessages,
 }: {
   status: string;
-  messages: { id: string }[];
-  storedMessages: { id: string }[];
+  messages: readonly unknown[];
+  storedMessages: readonly unknown[];
 }): boolean {
   if (status !== "ready" || messages.length === 0) {
     return false;
   }
 
-  return messageSignature(messages) !== messageSignature(storedMessages);
+  try {
+    return (
+      transcriptSignature(messages) !== transcriptSignature(storedMessages)
+    );
+  } catch {
+    /*
+     * A transcript that will not serialise cannot be compared, and would not
+     * survive `writeChat` either. Answering "yes, write" keeps the failure in
+     * one place — the store's own guarded write — rather than adding a second
+     * silent way to lose a turn.
+     */
+    return true;
+  }
 }
 
 /**

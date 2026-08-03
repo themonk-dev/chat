@@ -1,6 +1,7 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import { deleteChat, readChat, writeChat } from "@/lib/chats/store";
+import type { ChatMessage } from "@/lib/types";
 import { shouldPersistChat, usePersistChat } from "./use-active-chat";
 
 const userMessage = (id: string, text: string) => ({
@@ -14,6 +15,50 @@ const assistantMessage = (id: string, text: string) => ({
   parts: [{ text, type: "text" as const }],
   role: "assistant" as const,
 });
+
+/**
+ * The `getWeather` approval request as `useChat` holds it while the Allow /
+ * Deny buttons are on screen.
+ */
+const approvalRequested = (id: string): ChatMessage =>
+  ({
+    id,
+    parts: [
+      {
+        approval: { id: "approval-1" },
+        input: { city: "San Francisco" },
+        state: "approval-requested",
+        toolCallId: "call-1",
+        type: "tool-getWeather",
+      },
+    ],
+    role: "assistant",
+  }) as unknown as ChatMessage;
+
+/**
+ * The same message after Deny. `addToolApprovalResponse` rewrites the last
+ * message's `parts` via `replaceMessage(messages.length - 1, ...)`: the
+ * message id, the array length and the `toolCallId` all survive untouched —
+ * only the part's `state` and `approval` change.
+ */
+const approvalDenied = (id: string): ChatMessage =>
+  ({
+    id,
+    parts: [
+      {
+        approval: {
+          approved: false,
+          id: "approval-1",
+          reason: "User denied weather lookup",
+        },
+        input: { city: "San Francisco" },
+        state: "approval-responded",
+        toolCallId: "call-1",
+        type: "tool-getWeather",
+      },
+    ],
+    role: "assistant",
+  }) as unknown as ChatMessage;
 
 describe("shouldPersistChat", () => {
   it("does not persist merely opening a stored thread", () => {
@@ -68,6 +113,30 @@ describe("shouldPersistChat", () => {
       userMessage("u2", "different"),
       assistantMessage("a2", "new"),
     ];
+    expect(
+      shouldPersistChat({ messages, status: "ready", storedMessages: stored })
+    ).toBe(true);
+  });
+
+  it("persists a tool denial, which changes only a message's parts", () => {
+    // Same ids, same count, same order — neither a count nor an id
+    // signature can see this. Only the part's state and approval changed.
+    const stored = [userMessage("u1", "weather?"), approvalRequested("a1")];
+    const messages = [userMessage("u1", "weather?"), approvalDenied("a1")];
+
+    expect(
+      shouldPersistChat({ messages, status: "ready", storedMessages: stored })
+    ).toBe(true);
+  });
+
+  it("persists an in-place text edit that keeps every id", () => {
+    // The general form of the same hole: content changed, structure did not.
+    const stored = [userMessage("u1", "hi"), assistantMessage("a1", "hello")];
+    const messages = [
+      userMessage("u1", "hi"),
+      assistantMessage("a1", "hello, corrected"),
+    ];
+
     expect(
       shouldPersistChat({ messages, status: "ready", storedMessages: stored })
     ).toBe(true);
@@ -169,6 +238,53 @@ describe("usePersistChat", () => {
     rerender({ messages: edited, status: "ready" });
 
     expect(readChat(chatId)?.messages).toEqual(edited);
+    expect(readChat(chatId)?.updatedAt).not.toBe(1);
+  });
+
+  /**
+   * The round-3 hole, driven end to end. The approval request settles to
+   * "ready" and is persisted; pressing Deny then rewrites that same message's
+   * parts in place — `addToolApprovalResponse` calls
+   * `replaceMessage(messages.length - 1, { ...lastMessage, parts })`, so the
+   * id sequence and the count are byte-identical to what was just stored, and
+   * `sendAutomaticallyWhen` does not fire on a denial, so nothing further
+   * changes the transcript. An id or count signature skips the write and the
+   * denial is lost on reload.
+   */
+  it("persists a denied tool approval, whose ids and count never change", () => {
+    const request = [userMessage("u1", "weather?"), approvalRequested("a1")];
+    writeChat({
+      id: chatId,
+      messages: request as ChatMessage[],
+      title: "weather?",
+      updatedAt: 1,
+    });
+
+    const { rerender } = renderHook(
+      (props: { messages: ChatMessage[]; status: string }) =>
+        usePersistChat({
+          chatId,
+          messages: props.messages,
+          status: props.status,
+        }),
+      { initialProps: { messages: request as ChatMessage[], status: "ready" } }
+    );
+
+    // Re-opening the settled approval request re-stamps nothing.
+    expect(readChat(chatId)?.updatedAt).toBe(1);
+
+    // Deny: same ids, same length, new parts.
+    const denied = [userMessage("u1", "weather?"), approvalDenied("a1")];
+    expect(denied.map((m) => m.id)).toEqual(request.map((m) => m.id));
+    expect(denied).toHaveLength(request.length);
+
+    rerender({ messages: denied, status: "ready" });
+
+    const persisted = readChat(chatId)?.messages as ChatMessage[] | undefined;
+    expect(persisted).toEqual(denied);
+    expect(
+      (persisted?.[1].parts[0] as { state?: string } | undefined)?.state
+    ).toBe("approval-responded");
     expect(readChat(chatId)?.updatedAt).not.toBe(1);
   });
 });
