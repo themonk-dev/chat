@@ -357,6 +357,57 @@ describe("useProviderAuth", () => {
   });
 
   /**
+   * The bug this task fixes: `popupReceiver()` with no options falls back to
+   * `window.location.href` as its redirect URI, so the provider's popup
+   * redirects back to whatever page the reader happened to be on — the chat
+   * page, which has no handshake code and just boots a second copy of the
+   * app inside the 520×680 popup. `connect()` must now pass an explicit
+   * `redirectUri` pointing at `/callback`, the dedicated handshake route.
+   *
+   * This drives the real `popupReceiver` (not mocked) through `start()`,
+   * the same way `fakeLogin` above drives a real `manualReceiver`, and reads
+   * back the `redirectUri` the receiver actually resolved — the same field
+   * `popup.ts`'s own `start()` returns and the SDK sends as `redirect_uri`
+   * when it builds the authorization URL.
+   */
+  it("gives popupReceiver an explicit redirectUri pointing at /callback, not the current page", async () => {
+    const openrouterToken: TokenSet = {
+      accessToken: "openrouter-access-token",
+      provider: "openrouter",
+      raw: {},
+      tokenType: "Bearer",
+    };
+    let capturedRedirectUri: string | undefined;
+    const openrouterClient = makeClient({
+      login: vi.fn().mockImplementation(async (options) => {
+        const started = await options.receiver.start({
+          provider: { id: "openrouter" },
+        });
+        capturedRedirectUri = started.redirectUri;
+        await started.close();
+        return openrouterToken;
+      }),
+    });
+
+    const clients: Record<string, FakeClient> = {
+      openrouter: openrouterClient,
+    };
+    vi.mocked(clientFor).mockImplementation(
+      (id: string) => clients[id] as never
+    );
+
+    const { result } = renderHook(() => useProviderAuth(), {
+      wrapper: ProviderAuthProvider,
+    });
+
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    expect(capturedRedirectUri).toBe(`${window.location.origin}/callback`);
+  });
+
+  /**
    * The fix for the second regression this task surfaced: `connect()`'s
    * paste branch used to call a bare `createAuthorization()`, which throws
    * "No redirect URI for provider" for Claude and Gemini — both rely on a
