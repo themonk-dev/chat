@@ -54,15 +54,13 @@ import {
 } from "../ai-elements/prompt-input";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { PaperclipIcon, StopIcon } from "./icons";
-import { PreviewAttachment } from "./preview-attachment";
+import { StopIcon } from "./icons";
 import {
   type SlashCommand,
   SlashCommandMenu,
   slashCommands,
 } from "./slash-commands";
 import { SuggestedActions } from "./suggested-actions";
-import type { VisibilityType } from "./visibility-selector";
 
 function setCookie(name: string, value: string) {
   const maxAge = 60 * 60 * 24 * 365;
@@ -82,7 +80,6 @@ function PureMultimodalInput({
   setMessages,
   sendMessage,
   className,
-  selectedVisibilityType,
   selectedModelId,
   onModelChange,
   editingMessage,
@@ -102,7 +99,6 @@ function PureMultimodalInput({
     | UseChatHelpers<ChatMessage>["sendMessage"]
     | (() => Promise<void>);
   className?: string;
-  selectedVisibilityType: VisibilityType;
   selectedModelId: string;
   onModelChange?: (modelId: string) => void;
   editingMessage?: ChatMessage | null;
@@ -141,8 +137,6 @@ function PureMultimodalInput({
     setLocalStorageInput(input);
   }, [input, setLocalStorageInput]);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [uploadQueue, setUploadQueue] = useState<string[]>([]);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashQuery, setSlashQuery] = useState("");
   const [slashIndex, setSlashIndex] = useState(0);
@@ -267,118 +261,6 @@ function PureMultimodalInput({
     chatId,
   ]);
 
-  const uploadFile = useCallback(async (file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
-
-    try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/files/upload`,
-        {
-          body: formData,
-          method: "POST",
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        const { url, pathname, contentType } = data;
-
-        return {
-          contentType,
-          name: pathname,
-          url,
-        };
-      }
-      const { error } = await response.json();
-      toast.error(error);
-    } catch {
-      toast.error("Failed to upload file, please try again!");
-    }
-  }, []);
-
-  const handleFileChange = useCallback(
-    async (event: ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(event.target.files || []);
-
-      setUploadQueue(files.map((file) => file.name));
-
-      try {
-        const uploadPromises = files.map((file) => uploadFile(file));
-        const uploadedAttachments = await Promise.all(uploadPromises);
-        const successfullyUploadedAttachments = uploadedAttachments.filter(
-          (attachment) => attachment !== undefined
-        );
-
-        setAttachments((currentAttachments) => [
-          ...currentAttachments,
-          ...successfullyUploadedAttachments,
-        ]);
-      } catch {
-        toast.error("Failed to upload files");
-      } finally {
-        setUploadQueue([]);
-      }
-    },
-    [setAttachments, uploadFile]
-  );
-
-  const handlePaste = useCallback(
-    async (event: ClipboardEvent) => {
-      const items = event.clipboardData?.items;
-      if (!items) {
-        return;
-      }
-
-      const imageItems = Array.from(items).filter((item) =>
-        item.type.startsWith("image/")
-      );
-
-      if (imageItems.length === 0) {
-        return;
-      }
-
-      event.preventDefault();
-
-      setUploadQueue((prev) => [...prev, "Pasted image"]);
-
-      try {
-        const uploadPromises = imageItems
-          .map((item) => item.getAsFile())
-          .filter((file): file is File => file !== null)
-          .map((file) => uploadFile(file));
-
-        const uploadedAttachments = await Promise.all(uploadPromises);
-        const successfullyUploadedAttachments = uploadedAttachments.filter(
-          (attachment) =>
-            attachment !== undefined &&
-            attachment.url !== undefined &&
-            attachment.contentType !== undefined
-        );
-
-        setAttachments((curr) => [
-          ...curr,
-          ...(successfullyUploadedAttachments as Attachment[]),
-        ]);
-      } catch {
-        toast.error("Failed to upload pasted image(s)");
-      } finally {
-        setUploadQueue([]);
-      }
-    },
-    [setAttachments, uploadFile]
-  );
-
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) {
-      return;
-    }
-
-    textarea.addEventListener("paste", handlePaste);
-    return () => textarea.removeEventListener("paste", handlePaste);
-  }, [handlePaste]);
-
   const handleCancelEditMouseDown = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
       e.preventDefault();
@@ -472,23 +354,9 @@ function PureMultimodalInput({
       {!editingMessage &&
         !isLoading &&
         messages.length === 0 &&
-        attachments.length === 0 &&
-        uploadQueue.length === 0 && (
-          <SuggestedActions
-            chatId={chatId}
-            selectedVisibilityType={selectedVisibilityType}
-            sendMessage={sendMessage}
-          />
+        attachments.length === 0 && (
+          <SuggestedActions chatId={chatId} sendMessage={sendMessage} />
         )}
-
-      <input
-        className="pointer-events-none fixed -top-4 -left-4 size-0.5 opacity-0"
-        multiple
-        onChange={handleFileChange}
-        ref={fileInputRef}
-        tabIndex={-1}
-        type="file"
-      />
 
       <div className="relative">
         {slashOpen ? (
@@ -505,33 +373,6 @@ function PureMultimodalInput({
         className="[&>div]:rounded-2xl [&>div]:border [&>div]:border-border/30 [&>div]:bg-card/70 [&>div]:shadow-[var(--shadow-composer)] [&>div]:transition-shadow [&>div]:duration-300 [&>div]:focus-within:shadow-[var(--shadow-composer-focus)]"
         onSubmit={handlePromptSubmit}
       >
-        {(attachments.length > 0 || uploadQueue.length > 0) && (
-          <div
-            className="flex w-full self-start flex-row gap-2 overflow-x-auto px-3 pt-3 no-scrollbar"
-            data-testid="attachments-preview"
-          >
-            {attachments.map((attachment) => (
-              <AttachmentPreviewItem
-                attachment={attachment}
-                fileInputRef={fileInputRef}
-                key={attachment.url}
-                setAttachments={setAttachments}
-              />
-            ))}
-
-            {uploadQueue.map((filename) => (
-              <PreviewAttachment
-                attachment={{
-                  contentType: "",
-                  name: filename,
-                  url: "",
-                }}
-                isUploading={true}
-                key={filename}
-              />
-            ))}
-          </div>
-        )}
         <PromptInputTextarea
           className="min-h-24 text-[13px] leading-relaxed px-4 pt-3.5 pb-1.5 placeholder:text-muted-foreground/35"
           data-testid="multimodal-input"
@@ -545,11 +386,6 @@ function PureMultimodalInput({
         />
         <PromptInputFooter className="px-3 pb-3">
           <PromptInputTools>
-            <AttachmentsButton
-              fileInputRef={fileInputRef}
-              selectedModelId={selectedModelId}
-              status={status}
-            />
             <ModelSelectorCompact
               onModelChange={onModelChange}
               selectedModelId={selectedModelId}
@@ -567,7 +403,7 @@ function PureMultimodalInput({
                   : "bg-muted text-muted-foreground/25 cursor-not-allowed"
               )}
               data-testid="send-button"
-              disabled={!input.trim() || uploadQueue.length > 0}
+              disabled={!input.trim()}
               status={status}
               variant="secondary"
             >
@@ -592,9 +428,6 @@ export const MultimodalInput = memo(
     if (!equal(prevProps.attachments, nextProps.attachments)) {
       return false;
     }
-    if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
-      return false;
-    }
     if (prevProps.selectedModelId !== nextProps.selectedModelId) {
       return false;
     }
@@ -611,75 +444,6 @@ export const MultimodalInput = memo(
     return true;
   }
 );
-
-function PureAttachmentPreviewItem({
-  attachment,
-  fileInputRef,
-  setAttachments,
-}: {
-  attachment: Attachment;
-  fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
-  setAttachments: Dispatch<SetStateAction<Attachment[]>>;
-}) {
-  const handleRemove = useCallback(() => {
-    setAttachments((currentAttachments) =>
-      currentAttachments.filter((a) => a.url !== attachment.url)
-    );
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-  }, [attachment.url, fileInputRef, setAttachments]);
-
-  return <PreviewAttachment attachment={attachment} onRemove={handleRemove} />;
-}
-
-const AttachmentPreviewItem = memo(PureAttachmentPreviewItem);
-
-function PureAttachmentsButton({
-  fileInputRef,
-  status,
-  selectedModelId,
-}: {
-  fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
-  status: UseChatHelpers<ChatMessage>["status"];
-  selectedModelId: string;
-}) {
-  const { data: modelsResponse } = useSWR(
-    `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/models`,
-    (url: string) => fetch(url).then((r) => r.json()),
-    { dedupingInterval: 3_600_000, revalidateOnFocus: false }
-  );
-
-  const caps: Record<string, ModelCapabilities> | undefined =
-    modelsResponse?.capabilities ?? modelsResponse;
-  const hasVision = caps?.[selectedModelId]?.vision ?? false;
-  const handleClick = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      fileInputRef.current?.click();
-    },
-    [fileInputRef]
-  );
-
-  return (
-    <Button
-      className={cn(
-        "h-7 w-7 rounded-lg border border-border/40 p-1 transition-colors",
-        hasVision
-          ? "text-foreground hover:border-border hover:text-foreground"
-          : "text-muted-foreground/30 cursor-not-allowed"
-      )}
-      data-testid="attachments-button"
-      disabled={status !== "ready" || !hasVision}
-      onClick={handleClick}
-      variant="ghost"
-    >
-      <PaperclipIcon size={14} style={{ height: 14, width: 14 }} />
-    </Button>
-  );
-}
-
-const AttachmentsButton = memo(PureAttachmentsButton);
 
 function ModelSelectorOption({
   capabilities,

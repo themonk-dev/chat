@@ -6,17 +6,8 @@ import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
 import { VercelIcon } from "./icons";
-import { VisibilitySelector, type VisibilityType } from "./visibility-selector";
 
-function PureChatHeader({
-  chatId,
-  selectedVisibilityType,
-  isReadonly,
-}: {
-  chatId: string;
-  selectedVisibilityType: VisibilityType;
-  isReadonly: boolean;
-}) {
+function PureChatHeader() {
   const { state, toggleSidebar, isMobile } = useSidebar();
 
   if (state === "collapsed" && !isMobile) {
@@ -43,13 +34,6 @@ function PureChatHeader({
         <VercelIcon size={14} />
       </Link>
 
-      {!isReadonly && (
-        <VisibilitySelector
-          chatId={chatId}
-          selectedVisibilityType={selectedVisibilityType}
-        />
-      )}
-
       <Button
         asChild
         className="hidden rounded-lg bg-foreground px-4 text-background hover:bg-foreground/90 md:ml-auto md:flex"
@@ -67,10 +51,4 @@ function PureChatHeader({
   );
 }
 
-export const ChatHeader = memo(
-  PureChatHeader,
-  (prevProps, nextProps) =>
-    prevProps.chatId === nextProps.chatId &&
-    prevProps.selectedVisibilityType === nextProps.selectedVisibilityType &&
-    prevProps.isReadonly === nextProps.isReadonly
-);
+export const ChatHeader = memo(PureChatHeader);

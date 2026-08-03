@@ -2,7 +2,6 @@ import type { UseChatHelpers } from "@ai-sdk/react";
 import { ArrowDownIcon } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 import { useMessages } from "@/hooks/use-messages";
-import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useDataStream } from "./data-stream-provider";
@@ -13,12 +12,9 @@ type MessagesProps = {
   addToolApprovalResponse: UseChatHelpers<ChatMessage>["addToolApprovalResponse"];
   chatId: string;
   status: UseChatHelpers<ChatMessage>["status"];
-  votes: Vote[] | undefined;
   messages: ChatMessage[];
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
-  isReadonly: boolean;
-  isArtifactVisible: boolean;
   isLoading?: boolean;
   selectedModelId: string;
   onEditMessage?: (message: ChatMessage) => void;
@@ -28,12 +24,9 @@ function PureMessages({
   addToolApprovalResponse,
   chatId,
   status,
-  votes,
   messages,
   setMessages,
   regenerate,
-  isReadonly,
-  isArtifactVisible,
   isLoading,
   selectedModelId: _selectedModelId,
   onEditMessage,
@@ -76,17 +69,14 @@ function PureMessages({
           messages.length > 0 ? "bg-background" : "bg-transparent"
         )}
         ref={messagesContainerRef}
-        style={isArtifactVisible ? { scrollbarWidth: "none" } : undefined}
       >
         <div className="mx-auto flex min-h-full min-w-0 max-w-4xl flex-col gap-5 px-2 py-6 md:gap-7 md:px-4">
           {messages.map((message, index) => (
             <PreviewMessage
               addToolApprovalResponse={addToolApprovalResponse}
-              chatId={chatId}
               isLoading={
                 status === "streaming" && messages.length - 1 === index
               }
-              isReadonly={isReadonly}
               key={message.id}
               message={message}
               onEdit={onEditMessage}
@@ -95,11 +85,6 @@ function PureMessages({
                 hasSentMessage && index === messages.length - 1
               }
               setMessages={setMessages}
-              vote={
-                votes
-                  ? votes.find((vote) => vote.messageId === message.id)
-                  : undefined
-              }
             />
           ))}
 
