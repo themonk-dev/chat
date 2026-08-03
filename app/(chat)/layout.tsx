@@ -6,6 +6,7 @@ import { DataStreamProvider } from "@/components/chat/data-stream-provider";
 import { ChatShell } from "@/components/chat/shell";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { ActiveChatProvider } from "@/hooks/use-active-chat";
+import { ProviderAuthProvider } from "@/hooks/use-provider-auth";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -34,9 +35,11 @@ async function SidebarShell({ children }: { children: React.ReactNode }) {
           }}
         />
         <Suspense fallback={<div className="flex h-dvh" />}>
-          <ActiveChatProvider>
-            <ChatShell />
-          </ActiveChatProvider>
+          <ProviderAuthProvider>
+            <ActiveChatProvider>
+              <ChatShell />
+            </ActiveChatProvider>
+          </ProviderAuthProvider>
         </Suspense>
         {children}
       </SidebarInset>
