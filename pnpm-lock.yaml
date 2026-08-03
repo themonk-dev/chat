@@ -9,14 +9,14 @@ importers:
   .:
     dependencies:
       '@ai-oauth-sdk/browser':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: ^1.0.2
+        version: 1.0.2
       '@ai-oauth-sdk/core':
-        specifier: ^1.0.1
-        version: 1.0.1
+        specifier: ^1.0.2
+        version: 1.0.2
       '@ai-oauth-sdk/react':
-        specifier: ^1.0.1
-        version: 1.0.1(react@19.2.7)
+        specifier: ^1.0.2
+        version: 1.0.2(react@19.2.7)
       '@ai-sdk/otel':
         specifier: ^1.0.15
         version: 1.0.15(zod@4.4.3)
@@ -195,15 +195,15 @@ importers:
 
 packages:
 
-  '@ai-oauth-sdk/browser@1.0.1':
-    resolution: {integrity: sha512-eE/mqsR/de2xSqZeeb9kWcbe81B8j0LIwJFQX+bRlcKEs7yrertXftH9Lgfm0f4Jk/XvhtZOWRVSYtQZPbsR/A==}
+  '@ai-oauth-sdk/browser@1.0.2':
+    resolution: {integrity: sha512-SSIkwAFnAr5aFTbzJW7vyQPmoFdWATvIs6Ro3xkvdOXvtLYdICwrLfs5zG/oX1m85PUGZXyNjD9wqg8EMoEV2A==}
 
-  '@ai-oauth-sdk/core@1.0.1':
-    resolution: {integrity: sha512-ZUkNBQ1TlVuhL2jywe8QAWkkncvaBf0NWnZckqEdHcW8ntQNDiLBlj0rMAZN9ahHJkiXL2qVXoC6V/xJkDWzxA==}
+  '@ai-oauth-sdk/core@1.0.2':
+    resolution: {integrity: sha512-mkxlI6hah6Zlp+S/ICaJh58w4fPY6s/pj6WhK3iv/V5ohEyMIuzyxdUT/uWaOjOFgruBxOPKezCnBpU+5fHiWg==}
     engines: {node: '>=22'}
 
-  '@ai-oauth-sdk/react@1.0.1':
-    resolution: {integrity: sha512-Yutc3xyrFZyQbbAYap+3atAWnJt35gDRunKKsbG/O5C2+vM7wC72FRui+JKf7EbUjAxu+PQGs9HqRkTgQ68Yug==}
+  '@ai-oauth-sdk/react@1.0.2':
+    resolution: {integrity: sha512-wa34JbKNhtuq+v7ZiyqLUcB72+pea3eR8c7EFqYEH1jX8ERWqrw6YE8qntN8Tz4966eDl1G8I8uQacDbQcl4/g==}
     peerDependencies:
       react: '>=17'
 
@@ -4418,15 +4418,15 @@ packages:
 
 snapshots:
 
-  '@ai-oauth-sdk/browser@1.0.1':
+  '@ai-oauth-sdk/browser@1.0.2':
     dependencies:
-      '@ai-oauth-sdk/core': 1.0.1
+      '@ai-oauth-sdk/core': 1.0.2
 
-  '@ai-oauth-sdk/core@1.0.1': {}
+  '@ai-oauth-sdk/core@1.0.2': {}
 
-  '@ai-oauth-sdk/react@1.0.1(react@19.2.7)':
+  '@ai-oauth-sdk/react@1.0.2(react@19.2.7)':
     dependencies:
-      '@ai-oauth-sdk/core': 1.0.1
+      '@ai-oauth-sdk/core': 1.0.2
       react: 19.2.7
 
   '@ai-sdk/gateway@4.0.12(zod@4.4.3)':
