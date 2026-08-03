@@ -5,10 +5,28 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 import "./globals.css";
 
+const TITLE = "Chat with every AI provider in one place";
+const DESCRIPTION =
+  "Sign in with your own OpenRouter, ChatGPT, Claude, Gemini, Grok, GitHub Copilot, or Qwen account and start chatting right away. No signup, no API keys to paste — your OAuth token stays in this browser tab and chat history stays in local storage. Nothing is sent to or stored on our servers.";
+const SHORT_DESCRIPTION =
+  "One place to chat with seven AI providers using your own accounts. No signup, no API keys, nothing stored on our servers.";
+const SITE_URL = "https://chat.themonk.dev";
+
 export const metadata: Metadata = {
-  description: "Next.js chatbot template using the AI SDK.",
-  metadataBase: new URL("https://chat.vercel.ai"),
-  title: "Next.js Chatbot Template",
+  description: DESCRIPTION,
+  metadataBase: new URL(SITE_URL),
+  openGraph: {
+    description: SHORT_DESCRIPTION,
+    title: TITLE,
+    type: "website",
+    url: SITE_URL,
+  },
+  title: TITLE,
+  twitter: {
+    card: "summary",
+    description: SHORT_DESCRIPTION,
+    title: TITLE,
+  },
 };
 
 export const viewport = {

@@ -3,7 +3,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import type { UIMessage } from "ai";
 import equal from "fast-deep-equal";
-import { ArrowUpIcon } from "lucide-react";
+import { ArrowUpIcon, ExternalLinkIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
@@ -415,7 +415,47 @@ function PureMultimodalInput({
           )}
         </PromptInputFooter>
       </PromptInput>
+
+      <ComposerAttribution />
     </div>
+  );
+}
+
+/**
+ * Quiet credit line under the composer for the two projects this app is
+ * built on. Sits inside the same sticky footer as the input, so it can never
+ * scroll over the conversation above it, and wraps at narrow widths instead
+ * of forcing extra height onto the composer on mobile.
+ */
+function ComposerAttribution() {
+  return (
+    <p className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 px-2 text-center text-[11px] text-muted-foreground/60">
+      <span className="inline-flex items-center gap-1">
+        OAuth by
+        <a
+          className="inline-flex items-center gap-0.5 underline decoration-muted-foreground/30 underline-offset-2 hover:text-foreground hover:decoration-foreground/50"
+          href="https://ai-oauth.themonk.dev"
+          rel="noopener noreferrer"
+          target="_blank"
+        >
+          ai-oauth-sdk
+          <ExternalLinkIcon className="size-3" />
+        </a>
+      </span>
+      <span aria-hidden="true">·</span>
+      <span className="inline-flex items-center gap-1">
+        Chat interface based on
+        <a
+          className="inline-flex items-center gap-0.5 underline decoration-muted-foreground/30 underline-offset-2 hover:text-foreground hover:decoration-foreground/50"
+          href="https://vercel.com/templates/next.js/chatbot"
+          rel="noopener noreferrer"
+          target="_blank"
+        >
+          Vercel's Next.js AI Chatbot template
+          <ExternalLinkIcon className="size-3" />
+        </a>
+      </span>
+    </p>
   );
 }
 
