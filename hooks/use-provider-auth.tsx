@@ -1,7 +1,7 @@
 "use client";
 
 import type { TokenSet } from "@ai-oauth-sdk/browser";
-import { loginWithPopup } from "@ai-oauth-sdk/browser";
+import { manualReceiver, popupReceiver } from "@ai-oauth-sdk/browser";
 import {
   createContext,
   type ReactNode,
@@ -9,11 +9,11 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
-import { proxiedProviders } from "@/lib/oauth/providers";
 import { registry } from "@/lib/oauth/registry";
-import { clientFor, tokenStorage } from "@/lib/oauth/storage";
+import { clientFor } from "@/lib/oauth/storage";
 
 export type PendingAuth =
   | { kind: "device"; userCode: string; verificationUri: string }
@@ -30,6 +30,33 @@ type ProviderAuthValue = {
   tokens: TokenSet | undefined;
 };
 
+/**
+ * Tokens, tagged with the id of the provider they were fetched or won for.
+ *
+ * A raw `TokenSet | undefined` cannot distinguish "these are Claude's
+ * tokens" from "these are stale tokens a background flow handed us after
+ * the reader moved to Claude" — both look like `TokenSet | undefined` to
+ * the type system. Carrying `providerId` alongside `tokens` in one value
+ * makes a mismatched pair something the reducer below refuses to expose,
+ * rather than something every writer has to remember to check for: see
+ * `tokens`/`isConnected` in the `value` memo, which only surface this pair
+ * when `providerId` agrees with the current `activeId`.
+ */
+type TaggedTokens = { providerId: string; tokens: TokenSet | undefined };
+
+/**
+ * The paste flow's `manualReceiver` blocks on a `Promise<string>` that only
+ * `submitCode` can settle — there is no other way to hand it the reader's
+ * pasted value. `resolveInput` is that promise's `resolve`; `completion` is
+ * the whole `client.login()` call `connect()` started in the background, so
+ * `submitCode` can wait for the actual outcome (token written, or rejected)
+ * instead of returning as soon as the paste is merely accepted.
+ */
+type PasteAttempt = {
+  completion: Promise<void>;
+  resolveInput: (value: string) => void;
+};
+
 const ACTIVE_KEY = "ai-oauth-chat:provider";
 const ProviderAuthContext = createContext<ProviderAuthValue | null>(null);
 
@@ -44,8 +71,22 @@ const ProviderAuthContext = createContext<ProviderAuthValue | null>(null);
  */
 export function ProviderAuthProvider({ children }: { children: ReactNode }) {
   const [activeId, setActive] = useState("openrouter");
-  const [tokens, setTokens] = useState<TokenSet | undefined>(undefined);
+  const [taggedTokens, setTaggedTokens] = useState<TaggedTokens>({
+    providerId: "openrouter",
+    tokens: undefined,
+  });
   const [pending, setPending] = useState<PendingAuth | undefined>(undefined);
+
+  /**
+   * The `AbortController` for whichever `connect()` call is currently
+   * in-flight for the device or popup flow, so `setActiveId` can cut it off
+   * the moment the reader is no longer waiting on it (see `setActiveId`
+   * below). `null` once that call has finished, one way or another.
+   */
+  const connectAbortRef = useRef<AbortController | null>(null);
+
+  /** The paste flow's in-progress attempt, if any — see `PasteAttempt`. */
+  const pasteAttemptRef = useRef<PasteAttempt | null>(null);
 
   useEffect(() => {
     const stored = sessionStorage.getItem(ACTIVE_KEY);
@@ -57,17 +98,18 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    const id = activeId;
 
-    clientFor(activeId)
+    clientFor(id)
       .getTokens()
       .then((found) => {
         if (!cancelled) {
-          setTokens(found);
+          setTaggedTokens({ providerId: id, tokens: found });
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setTokens(undefined);
+          setTaggedTokens({ providerId: id, tokens: undefined });
         }
       });
 
@@ -76,7 +118,19 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
     };
   }, [activeId]);
 
+  /**
+   * Switching away from whatever `connect()` is mid-flight for is exactly
+   * the moment that attempt's result stops being wanted: cuts off its
+   * `AbortController`, so a device poll or an open popup that finishes
+   * after the reader has moved on does not keep running in the background.
+   * `taggedTokens`' own pairing (see its type) is what keeps a result that
+   * arrives anyway from landing in the wrong place — this only saves the
+   * network activity, it is not what makes that safe.
+   */
   const setActiveId = useCallback((id: string) => {
+    connectAbortRef.current?.abort();
+    connectAbortRef.current = null;
+    pasteAttemptRef.current = null;
     setActive(id);
     setPending(undefined);
     sessionStorage.setItem(ACTIVE_KEY, id);
@@ -87,28 +141,52 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
    * gets denied or times out, or a popup the reader closes, has to leave the
    * dialog able to react rather than stuck showing a code that can no longer
    * be redeemed. Popup and device both resolve or fail within this call, so
-   * `finally` clears `pending` unconditionally once either is done — for
-   * popup that is a no-op most of the time, but it is one line of insurance
-   * against a stray value from whatever ran before.
+   * `finally` clears `pending` unconditionally once either is done. Paste
+   * clears it the same way, just from `completion`'s `finally` instead of
+   * this function's own — see below.
    *
-   * Paste is the exception: `setPending` here is not cleanup, it is the
-   * successful outcome of this step — the flow is not over, it is handed to
-   * `submitCode`. Only a failure to even get that far clears it, and the
-   * error is rethrown rather than swallowed either way, so the caller (the
-   * dialog) can show it instead of guessing from a reset `pending`.
+   * All three flows keep working after the reader backs out of the dialog —
+   * a popup window left open, a device code approved later in another tab,
+   * a paste flow still waiting on a `submitCode` that never comes — so all
+   * three are given `controller.signal` to stop that work the moment
+   * `setActiveId` decides it is no longer wanted. Once a result does arrive,
+   * it is tagged with `result.provider` — the SDK's own record of which
+   * provider actually issued it, not this call's closed-over `activeId` —
+   * so a late result cannot silently masquerade as belonging to whatever is
+   * active by the time it lands; see `taggedTokens`.
+   *
+   * Popup and paste both go through `clientFor(activeId).login()` rather
+   * than the SDK's `loginWithPopup()` helper or a standalone
+   * `createAuthorization()` + `completeAuthorization()` pair, deliberately:
+   * a throwaway `AuthClient` built around the same shared storage still
+   * caches `getTokens()` on its own instance after the first read, so its
+   * `setTokens` (which `login()` calls on success) never reaches the
+   * memoized instance `clientFor(id)` hands out everywhere else —
+   * `manage-providers.tsx`'s connection dots, the model list — and that
+   * instance would keep answering `undefined` forever after a real connect,
+   * even with the token sitting in storage. Routing through the same
+   * memoized client `deviceLogin` already used below makes it the single
+   * writer for a provider's tokens, not just usually.
    */
   const connect = useCallback(async () => {
     const { flow } = registry[activeId];
-    const provider = proxiedProviders[activeId];
 
     if (flow === "popup") {
+      const client = clientFor(activeId);
+      const controller = new AbortController();
+      connectAbortRef.current = controller;
+
       try {
-        const result = await loginWithPopup(provider, {
-          storage: tokenStorage,
+        const result = await client.login({
+          receiver: popupReceiver(),
+          signal: controller.signal,
         });
-        setTokens(result);
+        setTaggedTokens({ providerId: result.provider, tokens: result });
       } finally {
         setPending(undefined);
+        if (connectAbortRef.current === controller) {
+          connectAbortRef.current = null;
+        }
       }
 
       return;
@@ -116,6 +194,8 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
 
     if (flow === "device") {
       const client = clientFor(activeId);
+      const controller = new AbortController();
+      connectAbortRef.current = controller;
 
       try {
         const result = await client.deviceLogin({
@@ -127,58 +207,119 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
                 device.verificationUriComplete ?? device.verificationUri,
             });
           },
+          signal: controller.signal,
         });
-        setTokens(result);
+        setTaggedTokens({ providerId: result.provider, tokens: result });
       } finally {
         setPending(undefined);
+        if (connectAbortRef.current === controller) {
+          connectAbortRef.current = null;
+        }
       }
 
       return;
     }
 
+    /**
+     * `manualReceiver`'s `prompt` is called once `login()` has minted the
+     * authorization URL and is ready to show it — this resolves
+     * `promptShown` and parks `pending` at that point, rather than
+     * `connect()` guessing the URL itself the way a standalone
+     * `createAuthorization()` call used to. `prompt` returns `inputPromise`,
+     * which only `submitCode` can settle: that is what makes `login()` wait
+     * for the reader instead of the split `createAuthorization` +
+     * `completeAuthorization` calls this used to be.
+     *
+     * `connect()` itself only awaits `promptShown` (raced against
+     * `completion`, in case `login()` fails before ever reaching `prompt` —
+     * a missing redirect URI, for instance), so it returns as soon as the
+     * tab is open and the dialog has something to show, exactly like the
+     * old `createAuthorization()` + `window.open()` pair did. The rest of
+     * the flow — waiting for `submitCode`, exchanging the code, tagging and
+     * writing the result — runs in `completion`, in the background, for
+     * `submitCode` to await later.
+     */
     const client = clientFor(activeId);
+    const controller = new AbortController();
+    connectAbortRef.current = controller;
 
-    try {
-      const { url } = await client.createAuthorization();
-      window.open(url, "_blank", "noopener,noreferrer");
-      setPending({ kind: "paste", url });
-    } catch (error) {
-      setPending(undefined);
-      throw error;
-    }
+    let resolveInput!: (value: string) => void;
+    const inputPromise = new Promise<string>((resolve) => {
+      resolveInput = resolve;
+    });
+
+    let signalPromptShown!: () => void;
+    const promptShown = new Promise<void>((resolve) => {
+      signalPromptShown = resolve;
+    });
+
+    const completion = client
+      .login({
+        openUrl: (url) => {
+          window.open(url, "_blank", "noopener,noreferrer");
+        },
+        receiver: manualReceiver({
+          prompt: (url) => {
+            setPending({ kind: "paste", url });
+            signalPromptShown();
+            return inputPromise;
+          },
+        }),
+        signal: controller.signal,
+      })
+      .then((result) => {
+        setTaggedTokens({ providerId: result.provider, tokens: result });
+      })
+      .finally(() => {
+        setPending(undefined);
+        if (connectAbortRef.current === controller) {
+          connectAbortRef.current = null;
+        }
+      });
+    // Nothing awaits `completion` unless `submitCode` is called (the reader
+    // may cancel before ever pasting anything) — one handler is enough to
+    // keep a rejection from being reported as unhandled; `submitCode`, if
+    // it runs, awaits `completion` itself and surfaces the same rejection.
+    completion.catch(() => undefined);
+
+    pasteAttemptRef.current = { completion, resolveInput };
+    await Promise.race([promptShown, completion]);
   }, [activeId]);
 
   /**
-   * Paste providers hand back either a bare code or the whole redirect URL the
-   * browser could not load. Accept both by handing the raw input straight to
-   * `completeAuthorization` as a `callbackUrl`: each provider's own
-   * `parseCallback` already knows how to read its shape — Claude's bare
-   * `code#state`, Gemini's unreachable `http://localhost/...` — so
-   * re-implementing that parsing here would only be a second copy that can
-   * drift from the SDK's.
+   * Hands the reader's pasted value to whichever `manualReceiver` `prompt`
+   * call from `connect()` is waiting on it — `resolveInput` — then waits for
+   * `completion`, the same `client.login()` call `connect()` started, to
+   * actually finish. `manualReceiver` accepts a full redirect URL, a bare
+   * code, or Claude's `code#state` and does its own parsing (via the
+   * provider's `parseCallback`), so nothing here re-implements that.
    *
-   * This is the flow's last step either way. A rejected code (expired,
-   * mistyped, already consumed) ends the attempt exactly like success does, so
-   * `pending` is cleared in `finally` regardless of outcome — the dialog is
-   * not left stranded on a code that can never be resubmitted successfully —
-   * and the error is left to propagate so the dialog can show it.
+   * A rejected code (expired, mistyped, already consumed) rejects
+   * `completion` exactly like a network failure would, and propagates the
+   * same way — the dialog's `.catch()` shows it. `pending` is cleared by
+   * `completion`'s own `finally` in `connect()`, not here, since that is
+   * the one place that already runs regardless of how the attempt ends.
+   *
+   * If there is no attempt in flight — the reader pasted something before
+   * ever clicking "Open" — this throws rather than silently resolving,
+   * which would otherwise read to the dialog as success and close it having
+   * done nothing.
    */
-  const submitCode = useCallback(
-    async (code: string) => {
-      try {
-        const result = await clientFor(activeId).completeAuthorization({
-          callbackUrl: code.trim(),
-        });
-        setTokens(result);
-      } finally {
-        setPending(undefined);
-      }
-    },
-    [activeId]
-  );
+  const submitCode = useCallback(async (code: string) => {
+    const attempt = pasteAttemptRef.current;
+
+    if (!attempt) {
+      throw new Error(
+        "Open the provider first, then paste the code it shows you."
+      );
+    }
+
+    attempt.resolveInput(code.trim());
+    await attempt.completion;
+  }, []);
 
   const disconnect = useCallback(() => {
-    setTokens(undefined);
+    setTaggedTokens({ providerId: activeId, tokens: undefined });
     setPending(undefined);
     clientFor(activeId)
       .logout()
@@ -186,6 +327,9 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
         // Local state is already cleared above; nothing left to do.
       });
   }, [activeId]);
+
+  const tokens =
+    taggedTokens.providerId === activeId ? taggedTokens.tokens : undefined;
 
   const value = useMemo<ProviderAuthValue>(
     () => ({
