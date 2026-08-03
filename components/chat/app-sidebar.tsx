@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback } from "react";
 import { SidebarHistory } from "@/components/chat/sidebar-history";
+import { ThemeToggle } from "@/components/chat/theme-toggle";
 import {
   Sidebar,
   SidebarContent,
@@ -92,7 +93,9 @@ export function AppSidebar() {
         </SidebarGroup>
         <SidebarHistory />
       </SidebarContent>
-      <SidebarFooter className="border-t border-sidebar-border pt-2 pb-3" />
+      <SidebarFooter className="border-t border-sidebar-border pt-2 pb-3">
+        <ThemeToggle />
+      </SidebarFooter>
       <SidebarRail />
     </Sidebar>
   );
