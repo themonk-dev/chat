@@ -1,3 +1,4 @@
+import { checkBotId } from "botid/server";
 import { forward } from "@/lib/oauth/proxy";
 import { resolveTarget, withQuery } from "@/lib/oauth/targets";
 
@@ -23,6 +24,12 @@ async function handler(
   request: Request,
   { params }: { params: Promise<RouteParams> }
 ) {
+  const verification = await checkBotId();
+
+  if (verification.isBot) {
+    return Response.json({ error: "blocked" }, { status: 403 });
+  }
+
   const { id, kind, path = [] } = await params;
   const target = resolveTarget(kind, id, path);
 
