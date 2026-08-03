@@ -178,7 +178,9 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
 
       try {
         const result = await client.login({
-          receiver: popupReceiver(),
+          receiver: popupReceiver({
+            redirectUri: `${window.location.origin}/callback`,
+          }),
           signal: controller.signal,
         });
         setTaggedTokens({ providerId: result.provider, tokens: result });
