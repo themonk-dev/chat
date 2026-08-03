@@ -9,6 +9,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { proxiedProviders } from "@/lib/oauth/providers";
@@ -47,6 +48,33 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
   const [tokens, setTokens] = useState<TokenSet | undefined>(undefined);
   const [pending, setPending] = useState<PendingAuth | undefined>(undefined);
 
+  /**
+   * Mirrors `activeId` for `connect()`'s own late-arriving continuations.
+   *
+   * Device polling has no deadline shorter than the RFC 8628 code's own
+   * expiry (minutes), and a popup's promise only settles when the user
+   * finishes there or closes it. Both keep running after the reader backs
+   * out of the dialog and `activeId` moves on, so by the time either
+   * resolves, the `activeId` closed over at the start of `connect()` may no
+   * longer be current. Reading this ref instead — updated by the effect
+   * below on every commit, not by the async work itself — is what lets the
+   * guard in `connect()` tell "this is still the flow I started" from "the
+   * reader moved on; do not let a foreign token land in active state."
+   */
+  const activeIdRef = useRef(activeId);
+
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
+  /**
+   * The `AbortController` for whichever `connect()` call is currently
+   * in-flight for the device or popup flow, so `setActiveId` can cut it off
+   * the moment the reader is no longer waiting on it (see `setActiveId`
+   * below). `null` once that call has finished, one way or another.
+   */
+  const connectAbortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     const stored = sessionStorage.getItem(ACTIVE_KEY);
 
@@ -76,7 +104,17 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
     };
   }, [activeId]);
 
+  /**
+   * Switching away from whatever `connect()` is mid-flight for is exactly
+   * the moment that attempt's result stops being wanted: cuts off its
+   * `AbortController` first, so a device poll or an open popup that
+   * finishes after the reader has moved on does not resolve into anything.
+   * `connect()`'s own guard (see below) is the backstop for the sliver of
+   * time between the signal firing and the underlying request noticing it.
+   */
   const setActiveId = useCallback((id: string) => {
+    connectAbortRef.current?.abort();
+    connectAbortRef.current = null;
     setActive(id);
     setPending(undefined);
     sessionStorage.setItem(ACTIVE_KEY, id);
@@ -96,19 +134,39 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
    * `submitCode`. Only a failure to even get that far clears it, and the
    * error is rethrown rather than swallowed either way, so the caller (the
    * dialog) can show it instead of guessing from a reset `pending`.
+   *
+   * Popup and device both keep working after the reader backs out of the
+   * dialog — a popup window left open, a device code the reader approves
+   * later in another tab — so both are given `controller.signal` to stop
+   * that work the moment `setActiveId` decides it is no longer wanted, and
+   * both check `activeIdRef` before writing the result into active state as
+   * a second, independent guard against whatever a signal cannot cut off in
+   * time (a response already in flight when it fires). Neither matters for
+   * paste: `createAuthorization` returns immediately, so there is nothing
+   * left running in the background for `setActiveId` to race against.
    */
   const connect = useCallback(async () => {
+    const attemptId = activeId;
     const { flow } = registry[activeId];
     const provider = proxiedProviders[activeId];
 
     if (flow === "popup") {
+      const controller = new AbortController();
+      connectAbortRef.current = controller;
+
       try {
         const result = await loginWithPopup(provider, {
+          signal: controller.signal,
           storage: tokenStorage,
         });
-        setTokens(result);
+        if (activeIdRef.current === attemptId) {
+          setTokens(result);
+        }
       } finally {
         setPending(undefined);
+        if (connectAbortRef.current === controller) {
+          connectAbortRef.current = null;
+        }
       }
 
       return;
@@ -116,6 +174,8 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
 
     if (flow === "device") {
       const client = clientFor(activeId);
+      const controller = new AbortController();
+      connectAbortRef.current = controller;
 
       try {
         const result = await client.deviceLogin({
@@ -127,10 +187,16 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
                 device.verificationUriComplete ?? device.verificationUri,
             });
           },
+          signal: controller.signal,
         });
-        setTokens(result);
+        if (activeIdRef.current === attemptId) {
+          setTokens(result);
+        }
       } finally {
         setPending(undefined);
+        if (connectAbortRef.current === controller) {
+          connectAbortRef.current = null;
+        }
       }
 
       return;
@@ -162,14 +228,24 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
    * `pending` is cleared in `finally` regardless of outcome — the dialog is
    * not left stranded on a code that can never be resubmitted successfully —
    * and the error is left to propagate so the dialog can show it.
+   *
+   * The request this makes is short, but not instant, and the dialog does
+   * not block Escape while it is in flight — so, like `connect()`, this
+   * checks `activeIdRef` before writing the result into active state, in
+   * case the reader backed out and a restore moved `activeId` on while this
+   * was still on the wire.
    */
   const submitCode = useCallback(
     async (code: string) => {
+      const attemptId = activeId;
+
       try {
         const result = await clientFor(activeId).completeAuthorization({
           callbackUrl: code.trim(),
         });
-        setTokens(result);
+        if (activeIdRef.current === attemptId) {
+          setTokens(result);
+        }
       } finally {
         setPending(undefined);
       }
