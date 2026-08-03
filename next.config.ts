@@ -18,6 +18,14 @@ const nextConfig: NextConfig = {
         ],
       }
     : {}),
+  /*
+   * cacheComponents is deliberately off. Turning it on rejects any explicit
+   * `runtime` route segment config — not only `runtime = "edge"` — and
+   * app/api/[kind]/[id]/[[...path]]/route.ts pins itself to `runtime = "nodejs"`
+   * on purpose. That route wins: it's a build-checked guarantee that the
+   * OAuth proxy never lands on a V8-isolate runtime, versus a client-navigation
+   * optimization this two-route app doesn't need.
+   */
   devIndicators: false,
   env: {
     NEXT_PUBLIC_BASE_PATH: basePath,

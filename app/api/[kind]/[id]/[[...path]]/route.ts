@@ -7,6 +7,13 @@ import { resolveTarget, withQuery } from "@/lib/oauth/targets";
  * that fingerprint outright — Claude's token endpoint answers `429`, the Codex
  * API answers a Cloudflare block page. Node is accepted by all of them. This
  * one line is why the playground lives on Vercel rather than on Workers.
+ *
+ * It is also why `cacheComponents` is off in next.config.ts: enabling it makes
+ * the build reject this export and tell you to remove it. Removing it would
+ * still land on Node today, since that's the App Router default — but silently,
+ * with nothing left in the tree recording that it has to. Don't delete this to
+ * satisfy the compiler; disable cacheComponents instead, or this route goes to
+ * Edge the next time the default changes.
  */
 export const runtime = "nodejs";
 
