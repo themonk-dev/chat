@@ -157,16 +157,36 @@ function ManageProvidersRow({
  * `AuthDialog` — which always renders the active provider's flow — shows the
  * right one. The popover closes when the dialog opens so the two Radix
  * layers never fight over dismiss/focus handling.
+ *
+ * Switching `activeId` to open the dialog is a means, not an end: every chat
+ * message goes out tagged with `activeId`, so a reader who opens Connect on
+ * a provider they were merely curious about, then backs out, must land back
+ * where they started — not on a provider they never asked to talk to, one
+ * that may hold no token at all. `previousActiveId` remembers what to
+ * restore, and the effect below decides whether to use it once the dialog
+ * closes: `isConnected` at that moment is trustworthy for this precisely
+ * because the target provider always started disconnected (that's the only
+ * way its row offers `Connect`), so "still disconnected" and "cancelled or
+ * failed" are the same fact. This deliberately reads `isConnected` rather
+ * than trusting the dialog's own lifecycle, because `connect()` resolves for
+ * the popup flow but only parks in `pending` for device and paste — the
+ * dialog closing is not the same event as the connection succeeding.
  */
 export function ManageProviders() {
   const [open, setOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const { activeId, disconnect, setActiveId } = useProviderAuth();
+  const [previousActiveId, setPreviousActiveId] = useState<
+    string | undefined
+  >();
+  const { activeId, disconnect, isConnected, setActiveId } = useProviderAuth();
   const [connectedIds, setConnectedIds] = useConnectedProviders(open);
 
   const handleConnect = useCallback(
     (id: string) => {
-      if (id !== activeId) {
+      if (id === activeId) {
+        setPreviousActiveId(undefined);
+      } else {
+        setPreviousActiveId(activeId);
         setActiveId(id);
       }
       setOpen(false);
@@ -174,6 +194,23 @@ export function ManageProviders() {
     },
     [activeId, setActiveId]
   );
+
+  // Runs once the dialog closes, whichever way: on its own after a
+  // successful `connect()`, or via Escape/backdrop/close-button while
+  // `previousActiveId` still holds a provider to go back to. A successful
+  // connection keeps the newly active provider active (plainly what the
+  // reader wanted); anything else restores `previousActiveId`.
+  useEffect(() => {
+    if (dialogOpen || previousActiveId === undefined) {
+      return;
+    }
+
+    if (!isConnected) {
+      setActiveId(previousActiveId);
+    }
+
+    setPreviousActiveId(undefined);
+  }, [dialogOpen, isConnected, previousActiveId, setActiveId]);
 
   const handleDisconnect = useCallback(
     (id: string) => {
