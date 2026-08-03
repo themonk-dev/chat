@@ -25,7 +25,7 @@ import { registry } from "@/lib/oauth/registry";
 import { CopyIcon } from "./icons";
 import { providerLogos } from "./provider-logos";
 
-const PRIVACY_LINE =
+export const PRIVACY_LINE =
   "Your token stays in this tab. It is never sent to our servers, and it is gone when you close this tab.";
 
 function errorMessage(error: unknown): string {

@@ -2,18 +2,35 @@
 
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { motion } from "framer-motion";
-import { memo, useCallback } from "react";
+import { memo, useCallback, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { useProviderAuth } from "@/hooks/use-provider-auth";
 import { suggestions } from "@/lib/constants";
+import { registry } from "@/lib/oauth/registry";
 import type { ChatMessage } from "@/lib/types";
 import { Suggestion } from "../ai-elements/suggestion";
+import { AuthDialog, PRIVACY_LINE } from "./auth-dialog";
+import { providerLogos } from "./provider-logos";
 
 type SuggestedActionsProps = {
   chatId: string;
   sendMessage: UseChatHelpers<ChatMessage>["sendMessage"];
 };
 
+/**
+ * Fills the empty-state region above the composer. While the selected
+ * provider is disconnected, the four canned prompts would be actively
+ * misleading — none of them can send — so this swaps them for an explanation
+ * and a way to fix it instead. `key={activeId}` on the dialog and the
+ * disconnected check both read straight from `useProviderAuth()`, so
+ * switching providers in the dropdown updates this immediately, the same way
+ * it does the header button.
+ */
 function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
+  const { activeId, isConnected } = useProviderAuth();
+  const [dialogOpen, setDialogOpen] = useState(false);
   const suggestedActions = suggestions;
+
   const handleSuggestionClick = useCallback(
     (suggestion: string) => {
       window.history.pushState(
@@ -28,6 +45,48 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
     },
     [chatId, sendMessage]
   );
+
+  const handleOpenDialog = useCallback(() => {
+    setDialogOpen(true);
+  }, []);
+
+  if (!isConnected) {
+    const { label } = registry[activeId];
+    const Logo = providerLogos[activeId];
+
+    return (
+      <>
+        <motion.div
+          animate={{ opacity: 1, y: 0 }}
+          className="flex flex-col items-start gap-3 rounded-xl border border-border/50 bg-card/30 px-4 py-4 sm:px-5 sm:py-5"
+          data-testid="disconnected-notice"
+          exit={{ opacity: 0, y: 16 }}
+          initial={{ opacity: 0, y: 16 }}
+          transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <p className="flex items-center gap-2 text-[13px] text-foreground leading-relaxed">
+            {Logo ? <Logo className="size-4 shrink-0" /> : null}
+            Connect {label} to start chatting — nothing you send will go
+            anywhere until you do.
+          </p>
+          <Button
+            className="rounded-lg"
+            data-testid="disconnected-notice-connect"
+            onClick={handleOpenDialog}
+            size="sm"
+          >
+            Connect {label}
+          </Button>
+          <p className="text-[11px] text-muted-foreground">{PRIVACY_LINE}</p>
+        </motion.div>
+        <AuthDialog
+          key={activeId}
+          onOpenChange={setDialogOpen}
+          open={dialogOpen}
+        />
+      </>
+    );
+  }
 
   return (
     <div
