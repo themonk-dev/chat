@@ -148,6 +148,11 @@ describe("wrapCodeAssist", () => {
     });
 
     it("unwraps every event in a single chunk carrying more than one", async () => {
+      // A regression guard, not a catch: everything here arrives in one
+      // `transform()` call, so there is no boundary for the buffering fix
+      // to matter to — `split`+`map`+`join` on one chunk's complete text was
+      // always a lossless round trip. This exists to make sure the new
+      // buffering logic doesn't regress the case that was never broken.
       const inner: typeof fetch = () =>
         Promise.resolve(
           sseResponse([
@@ -189,6 +194,13 @@ describe("wrapCodeAssist", () => {
     });
 
     it("passes a [DONE] sentinel through untouched, even split across chunks", async () => {
+      // Also a regression guard rather than a catch, despite the split: a
+      // [DONE] line is never rewritten in either the old or new
+      // implementation, so simple concatenation of the two unrewritten
+      // fragments reconstructs it correctly by coincidence either way. This
+      // cannot, by construction, tell the buffering fix apart from its
+      // absence — it exists to pin down that [DONE] keeps surviving once
+      // real rewriting is in the mix, not to prove the chunk-boundary bug.
       const inner: typeof fetch = () =>
         Promise.resolve(
           sseResponse([
