@@ -18,9 +18,11 @@ import {
 import { useDataStream } from "@/components/chat/data-stream-provider";
 import { toast } from "@/components/chat/toast";
 import { useProviderAuth } from "@/hooks/use-provider-auth";
-import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import { deleteChat, readChat, writeChat } from "@/lib/chats/store";
 import { ChatbotError } from "@/lib/errors";
+import { defaultModelFor } from "@/lib/oauth/models";
+import { PROVIDER_ORDER } from "@/lib/oauth/registry";
+import { clientFor } from "@/lib/oauth/storage";
 import { OAuthChatTransport } from "@/lib/oauth/transport";
 import type { ChatMessage } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
@@ -38,9 +40,85 @@ type ActiveChatContextValue = {
   setInput: Dispatch<SetStateAction<string>>;
   isLoading: boolean;
   currentModelId: string;
-  setCurrentModelId: (id: string) => void;
+  /**
+   * `providerId` is optional so every existing one-argument call site (and
+   * the auto-recovery below, which already knows only the model id it wants)
+   * keeps working: it defaults to whichever provider is active right now.
+   * The model picker in `multimodal-input.tsx` always passes it explicitly,
+   * because that is the one call site where "the provider the model came
+   * from" and "the provider that happens to be active" can differ.
+   */
+  setCurrentModelId: (id: string, providerId?: string) => void;
   clearChat: () => void;
 };
+
+/** Tokens for every provider that currently holds one, not just the active one. */
+export type ConnectedProviders = Map<string, string>;
+
+/**
+ * Which providers currently hold a token, independent of which one is
+ * active — the same problem `components/chat/provider-selector.tsx` solves
+ * for its connection dots, via the same two-part answer: `useProviderAuth`
+ * already re-checks the *active* provider's token on every `activeId`
+ * change, so that transition is mirrored into the map for free; everything
+ * else is invisible to it and has to be read from storage directly.
+ *
+ * That file only does the storage read while its menu is open, since
+ * nothing needs the full set before then. Here, both callers (the picker's
+ * trigger, and the recovery effect below) need an answer before anything is
+ * ever opened, so the full read happens once on mount instead, then is kept
+ * current by the reactive half above.
+ */
+export function useConnectedProviders(): ConnectedProviders {
+  const { activeId, tokens } = useProviderAuth();
+  const [connected, setConnected] = useState<ConnectedProviders>(new Map());
+
+  useEffect(() => {
+    setConnected((previous) => {
+      const next = new Map(previous);
+      if (tokens?.accessToken) {
+        next.set(activeId, tokens.accessToken);
+      } else {
+        next.delete(activeId);
+      }
+      return next;
+    });
+  }, [activeId, tokens]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    Promise.all(
+      PROVIDER_ORDER.map(async (id) => {
+        const found = await clientFor(id)
+          .getTokens()
+          .catch(() => undefined);
+        return [id, found?.accessToken] as const;
+      })
+    ).then((results) => {
+      if (cancelled) {
+        return;
+      }
+      setConnected((previous) => {
+        const next = new Map(previous);
+        for (const [id, token] of results) {
+          if (token) {
+            next.set(id, token);
+          } else {
+            next.delete(id);
+          }
+        }
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return connected;
+}
 
 const ActiveChatContext = createContext<ActiveChatContextValue | null>(null);
 
@@ -176,13 +254,22 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
 
   const chatId = chatIdFromUrl ?? newChatIdRef.current;
 
-  const [currentModelId, setCurrentModelId] = useState(DEFAULT_CHAT_MODEL);
+  /**
+   * Starts empty rather than on any hard-coded model: with nothing connected
+   * there is nothing to offer, and an empty picker is the honest state, not
+   * a broken one. The effect below fills it in the moment a provider's
+   * tokens are found, and keeps it pointed at something usable after that.
+   */
+  const [currentModelId, setCurrentModelIdState] = useState("");
   const currentModelIdRef = useRef(currentModelId);
   useEffect(() => {
     currentModelIdRef.current = currentModelId;
   }, [currentModelId]);
 
-  const { activeId, tokens } = useProviderAuth();
+  /** Which provider `currentModelId` was picked from — see `setCurrentModelId`. */
+  const currentModelProviderRef = useRef<string | undefined>(undefined);
+
+  const { activeId, tokens, setActiveId } = useProviderAuth();
   const activeIdRef = useRef(activeId);
   useEffect(() => {
     activeIdRef.current = activeId;
@@ -191,6 +278,67 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     tokensRef.current = tokens;
   }, [tokens]);
+
+  /**
+   * `providerId` defaults to whichever provider is active right now, which
+   * is exactly right for every call this file makes itself (the recovery
+   * effect below always sets a model for the provider it just decided is
+   * active). The model picker passes it explicitly instead, because
+   * selecting a model there also switches the active provider to match — by
+   * the time this runs, `activeId` may already have moved on to a *third*
+   * provider if the reader clicked twice quickly, so the picker cannot rely
+   * on it and threads the real answer through instead.
+   */
+  const setCurrentModelId = useCallback(
+    (id: string, providerId?: string) => {
+      currentModelProviderRef.current = id
+        ? (providerId ?? activeId)
+        : undefined;
+      setCurrentModelIdState(id);
+    },
+    [activeId]
+  );
+
+  const connected = useConnectedProviders();
+
+  /**
+   * Keeps `currentModelId` pointed at something actually usable.
+   *
+   * A no-op is the common case: once a model is selected, its owning
+   * provider stays connected, and switching *away* from that provider
+   * without disconnecting it — the ordinary case of looking at something
+   * else — must not disturb the selection. Only two situations act:
+   *
+   * - Nothing usable is selected yet (a fresh session, or a session that
+   *   never had a provider connected) and a provider's tokens are found —
+   *   pick that provider's default model.
+   * - The provider that owned the selected model disconnects — fall back to
+   *   another connected provider's default, in `PROVIDER_ORDER`, or clear
+   *   the selection if none remain. The active provider is moved to match,
+   *   since a stale `activeId` would otherwise send the new selection's
+   *   model id to the old provider's API.
+   */
+  useEffect(() => {
+    const owner = currentModelProviderRef.current;
+    const ownerStillConnected = owner !== undefined && connected.has(owner);
+
+    if (currentModelId && ownerStillConnected) {
+      return;
+    }
+
+    const fallback = PROVIDER_ORDER.find((id) => connected.has(id));
+
+    if (fallback) {
+      currentModelProviderRef.current = fallback;
+      setCurrentModelIdState(defaultModelFor(fallback));
+      if (activeId !== fallback) {
+        setActiveId(fallback);
+      }
+    } else if (currentModelId) {
+      currentModelProviderRef.current = undefined;
+      setCurrentModelIdState("");
+    }
+  }, [connected, currentModelId, activeId, setActiveId]);
 
   const [input, setInput] = useState("");
 
@@ -320,6 +468,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       addToolApprovalResponse,
       input,
       currentModelId,
+      setCurrentModelId,
     ]
   );
 
