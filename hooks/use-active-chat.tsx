@@ -49,26 +49,87 @@ function extractChatId(pathname: string): string | null {
 }
 
 /**
+ * A cheap fingerprint of a transcript: the sequence of message ids. Every
+ * message that is sent, edited-and-regenerated, or newly loaded gets a fresh
+ * id (`generateId: generateUUID` above), so two transcripts with the same
+ * ids in the same order are the same content — without comparing the actual
+ * text, which would mean deep-comparing a long thread on every render.
+ */
+function messageSignature(messages: { id: string }[]): string {
+  return messages.map((message) => message.id).join("|");
+}
+
+/**
  * Loading a stored thread hands `useChat` a non-empty `messages` array and a
  * `status` of `"ready"` immediately — the same shape as a real reply having
- * just finished. Without this check, simply opening a thread would re-stamp
- * `updatedAt` and drag it to the top of the sidebar. Only a genuine change in
- * message count (a message sent, a reply completed) should persist.
+ * just finished. Comparing against a hand-maintained "last persisted count"
+ * used to guard against that, but a count is derived state: anything that
+ * changes `messages` without touching `chatId` (clearing, editing a message
+ * and regenerating) can desynchronise it, and a count collision then makes a
+ * real exchange silently fail to persist — self-healing on the next
+ * differing count, which makes it nasty to notice.
+ *
+ * Comparing the live transcript against what is actually stored for this
+ * thread has no state to desynchronise: it is correct for opening a thread
+ * (ids match what was just loaded from the same place), correct for a
+ * genuine send or a completed reply (a new id appears), and correct for
+ * "the count happens to coincide" cases like clear-then-send or
+ * edit-and-regenerate (the trailing id is still new, even when the count
+ * is not).
  */
 export function shouldPersistChat({
   status,
-  messageCount,
-  lastPersistedCount,
+  messages,
+  storedMessages,
 }: {
   status: string;
-  messageCount: number;
-  lastPersistedCount: number;
+  messages: { id: string }[];
+  storedMessages: { id: string }[];
 }): boolean {
-  return (
-    status === "ready" &&
-    messageCount > 0 &&
-    messageCount !== lastPersistedCount
-  );
+  if (status !== "ready" || messages.length === 0) {
+    return false;
+  }
+
+  return messageSignature(messages) !== messageSignature(storedMessages);
+}
+
+/**
+ * Owns the whole persistence decision: reads what is actually stored for
+ * `chatId` and writes only when the live transcript differs from it. Takes
+ * plain values rather than pulling from `useChat` itself so it can be driven
+ * directly in a test — chatId/messages/status in, a write (or not) out —
+ * without needing to stand up a real chat session.
+ */
+export function usePersistChat({
+  chatId,
+  messages,
+  status,
+}: {
+  chatId: string;
+  messages: ChatMessage[];
+  status: string;
+}): void {
+  useEffect(() => {
+    if (status !== "ready" || messages.length === 0) {
+      return;
+    }
+
+    const storedMessages = readChat(chatId)?.messages ?? [];
+
+    if (!shouldPersistChat({ messages, status, storedMessages })) {
+      return;
+    }
+
+    const first = messages.find((message) => message.role === "user");
+    const title =
+      first?.parts
+        ?.filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("")
+        .slice(0, 60) || "New chat";
+
+    writeChat({ id: chatId, messages, title, updatedAt: Date.now() });
+  }, [chatId, messages, status]);
 }
 
 export function ActiveChatProvider({ children }: { children: ReactNode }) {
@@ -202,51 +263,17 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
     }
   }, [sendMessage, chatId]);
 
-  const lastPersistedCountRef = useRef(initialMessages.length);
-
-  // Re-baseline whenever the active thread changes, so a freshly loaded
-  // chat's message count isn't mistaken for new activity by the effect below.
-  useEffect(() => {
-    lastPersistedCountRef.current = readChat(chatId)?.messages.length ?? 0;
-  }, [chatId]);
-
-  useEffect(() => {
-    if (
-      !shouldPersistChat({
-        lastPersistedCount: lastPersistedCountRef.current,
-        messageCount: messages.length,
-        status,
-      })
-    ) {
-      return;
-    }
-
-    const first = messages.find((message) => message.role === "user");
-    const title =
-      first?.parts
-        ?.filter((part) => part.type === "text")
-        .map((part) => part.text)
-        .join("")
-        .slice(0, 60) || "New chat";
-
-    writeChat({ id: chatId, messages, title, updatedAt: Date.now() });
-    lastPersistedCountRef.current = messages.length;
-  }, [chatId, messages, status]);
+  usePersistChat({ chatId, messages, status });
 
   /**
-   * The one place that knows both halves of "clear": the in-memory
-   * transcript lives here, and so does the baseline the persist effect
-   * compares against. Clearing only the messages (leaving the ref at its
-   * pre-clear count) would make the next exchange invisible to
-   * `shouldPersistChat` whenever it happens to land back on the same
-   * count — self-healing, intermittent, and nasty to diagnose. Resetting
-   * the baseline to 0 here, in the same place the store entry is deleted,
-   * keeps them consistent with what is actually stored: nothing.
+   * Clearing needs no special handling from `usePersistChat`: it empties
+   * the messages and deletes the store entry, and the next settled render
+   * simply finds nothing stored for this `chatId` — so any new exchange,
+   * whatever its eventual length, is seen as new content by construction.
    */
   const clearChat = useCallback(() => {
     setMessages(() => []);
     deleteChat(chatId);
-    lastPersistedCountRef.current = 0;
   }, [chatId, setMessages]);
 
   const value = useMemo<ActiveChatContextValue>(
