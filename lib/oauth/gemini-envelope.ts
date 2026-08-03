@@ -66,6 +66,12 @@ export function wrapCodeAssist(
  * a string URL, and rewriting a `Request`'s URL means constructing a new one
  * anyway, which is no simpler than leaving the (rare, likely test-only) case
  * alone.
+ *
+ * The regex is applied to the path only, split off before the `?`. Applied
+ * to the whole URL it can also match inside a query string that happens to
+ * contain the same `/models/{id}:` shape — a real caller would never send
+ * one, but nothing about matching the full string rules it out either, and
+ * "cannot over-strip" is exactly the guarantee this function needs to hold.
  */
 function stripModelSegment(
   url: string | URL | Request
@@ -74,49 +80,87 @@ function stripModelSegment(
     return url;
   }
 
-  return url.replace(/\/models\/[^/:?#]+:/, ":");
+  const [path, query] = url.split("?");
+  const strippedPath = path.replace(/\/models\/[^/:?#]+:/, ":");
+
+  return query === undefined ? strippedPath : `${strippedPath}?${query}`;
+}
+
+/** Rewrites one already-complete SSE line; anything else passes through untouched. */
+function rewriteLine(line: string): string {
+  if (!line.startsWith("data:")) {
+    return line;
+  }
+
+  const data = line.slice(5).trim();
+
+  if (!data || data === "[DONE]") {
+    return line;
+  }
+
+  try {
+    const parsed = JSON.parse(data) as { response?: unknown };
+
+    return `data: ${JSON.stringify(parsed.response ?? parsed)}`;
+  } catch {
+    return line;
+  }
 }
 
 /**
  * Rewrites each `data:` line rather than the whole body, because the stream has
  * to keep flowing — buffering it to unwrap once would hold the reply until the
  * last token before the reader saw the first.
+ *
+ * That still requires a line buffer *within* the transform, though. A network
+ * chunk boundary has no relationship to a line boundary — a multi-KB Gemini
+ * event routinely straddles one — and a `data:` line split across two chunks
+ * fails `JSON.parse` on both halves independently: the first half is
+ * incomplete JSON, the second doesn't start with `data:` at all, so both pass
+ * through unrewritten and the envelope survives into what `@ai-sdk/google`
+ * parses. That is not an error on either end, just an object with no
+ * `candidates` — silent token loss, not a thrown one. Carrying the trailing
+ * (possibly partial) line across `transform` calls, and processing whatever
+ * is left in `flush()`, is what makes each rewrite decision operate on a
+ * complete line regardless of how the bytes were chunked.
+ *
+ * `flush()`'s own `decoder.decode()` call (no arguments) also matters on its
+ * own: that is what flushes a multi-byte UTF-8 character split across the
+ * very last two chunks of the stream, which `{ stream: true }` deliberately
+ * holds back mid-stream and would otherwise drop.
  */
 function unwrapStream(
   body: ReadableStream<Uint8Array>
 ): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
+  let buffer = "";
 
   return body.pipeThrough(
     new TransformStream<Uint8Array, Uint8Array>({
+      flush(controller) {
+        buffer += decoder.decode();
+
+        if (buffer) {
+          controller.enqueue(encoder.encode(rewriteLine(buffer)));
+        }
+      },
       transform(chunk, controller) {
-        const text = decoder.decode(chunk, { stream: true });
+        buffer += decoder.decode(chunk, { stream: true });
 
-        const rewritten = text
-          .split("\n")
-          .map((line) => {
-            if (!line.startsWith("data:")) {
-              return line;
-            }
+        const lines = buffer.split("\n");
+        // The last element is whatever follows the final "\n" in the
+        // buffer — empty when the chunk ended exactly on a line break,
+        // otherwise a partial line completed by whatever arrives next.
+        // Either way it is not yet a complete line, so it is held back
+        // rather than rewritten.
+        buffer = lines.pop() ?? "";
 
-            const data = line.slice(5).trim();
-
-            if (!data || data === "[DONE]") {
-              return line;
-            }
-
-            try {
-              const parsed = JSON.parse(data) as { response?: unknown };
-
-              return `data: ${JSON.stringify(parsed.response ?? parsed)}`;
-            } catch {
-              return line;
-            }
-          })
-          .join("\n");
-
-        controller.enqueue(encoder.encode(rewritten));
+        if (lines.length > 0) {
+          controller.enqueue(
+            encoder.encode(`${lines.map(rewriteLine).join("\n")}\n`)
+          );
+        }
       },
     })
   );

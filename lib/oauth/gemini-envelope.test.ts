@@ -1,6 +1,49 @@
 import { describe, expect, it } from "vitest";
 import { wrapCodeAssist } from "./gemini-envelope";
 
+/** Simulates a network response arriving as the given raw chunks, in order. */
+function sseResponse(chunks: string[]): Response {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(body, {
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+async function readAll(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+
+  if (!reader) {
+    return "";
+  }
+
+  const decoder = new TextDecoder();
+  let out = "";
+
+  for (;;) {
+    // biome-ignore lint/performance/noAwaitInLoops: draining a reader is inherently sequential — each read depends on the last one's result
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    out += decoder.decode(value, { stream: true });
+  }
+
+  out += decoder.decode();
+
+  return out;
+}
+
 describe("wrapCodeAssist", () => {
   it("wraps the outbound body in the Code Assist envelope", async () => {
     let seen: unknown;
@@ -62,22 +105,107 @@ describe("wrapCodeAssist", () => {
     );
   });
 
-  it("leaves a URL with no /models/{id} segment untouched", async () => {
+  it("leaves a /models/{id} segment untouched when nothing follows it with a colon", async () => {
+    // A naive "strip any /models/xxx" regex would also eat this one. The
+    // real hazard is a segment that looks like the AI SDK's own
+    // `/models/{id}:method` shape but is not — e.g. a literal path
+    // component, or a query string that happens to contain the substring —
+    // and must survive because there is no trailing `:operation` to prove
+    // it is the thing being guarded against.
     let seenUrl: string | undefined;
-    const inner: typeof fetch = (url) => {
-      seenUrl = String(url);
+    const inner: typeof fetch = (requestUrl) => {
+      seenUrl = String(requestUrl);
       return Promise.resolve(new Response("{}"));
     };
 
-    await wrapCodeAssist(
-      "p",
-      "m",
-      inner
-    )("https://x.test", {
-      body: "{}",
-      method: "POST",
+    const url =
+      "https://x.test/v1beta/models/gemini-2.5-pro/list?from=/models/other:thing";
+
+    await wrapCodeAssist("p", "m", inner)(url, { body: "{}", method: "POST" });
+
+    expect(seenUrl).toBe(url);
+  });
+
+  describe("the SSE branch", () => {
+    it("reassembles an event whose data: line is split across two network chunks", async () => {
+      const inner: typeof fetch = () =>
+        Promise.resolve(
+          sseResponse([
+            'data: {"respon',
+            'se":{"candidates":[{"text":"hi"}]}}\n\n',
+          ])
+        );
+
+      const response = await wrapCodeAssist(
+        "p",
+        "m",
+        inner
+      )("https://x.test", { body: "{}", method: "POST" });
+
+      expect(await readAll(response)).toBe(
+        'data: {"candidates":[{"text":"hi"}]}\n\n'
+      );
     });
 
-    expect(seenUrl).toBe("https://x.test");
+    it("unwraps every event in a single chunk carrying more than one", async () => {
+      const inner: typeof fetch = () =>
+        Promise.resolve(
+          sseResponse([
+            'data: {"response":{"candidates":[{"text":"one"}]}}\n\ndata: {"response":{"candidates":[{"text":"two"}]}}\n\n',
+          ])
+        );
+
+      const response = await wrapCodeAssist(
+        "p",
+        "m",
+        inner
+      )("https://x.test", { body: "{}", method: "POST" });
+
+      expect(await readAll(response)).toBe(
+        'data: {"candidates":[{"text":"one"}]}\n\ndata: {"candidates":[{"text":"two"}]}\n\n'
+      );
+    });
+
+    it("flushes a trailing event that never receives a closing newline", async () => {
+      // The stream just ends mid-event — no more chunks, no trailing "\n" —
+      // which is what a `flush()`-less transform drops on the floor.
+      const inner: typeof fetch = () =>
+        Promise.resolve(
+          sseResponse([
+            'data: {"respon',
+            'se":{"candidates":[{"text":"tail"}]}}',
+          ])
+        );
+
+      const response = await wrapCodeAssist(
+        "p",
+        "m",
+        inner
+      )("https://x.test", { body: "{}", method: "POST" });
+
+      expect(await readAll(response)).toBe(
+        'data: {"candidates":[{"text":"tail"}]}'
+      );
+    });
+
+    it("passes a [DONE] sentinel through untouched, even split across chunks", async () => {
+      const inner: typeof fetch = () =>
+        Promise.resolve(
+          sseResponse([
+            'data: {"response":{"candidates":[{"text":"last"}]}}\n\ndata: [DON',
+            "E]\n\n",
+          ])
+        );
+
+      const response = await wrapCodeAssist(
+        "p",
+        "m",
+        inner
+      )("https://x.test", { body: "{}", method: "POST" });
+
+      expect(await readAll(response)).toBe(
+        'data: {"candidates":[{"text":"last"}]}\n\ndata: [DONE]\n\n'
+      );
+    });
   });
 });

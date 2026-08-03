@@ -1,6 +1,6 @@
 import {
-  codexClientVersion,
   normalizeCodexResponsesBody,
+  type ResolvedCredential,
   type TokenSet,
 } from "@ai-oauth-sdk/core";
 import { createAnthropic } from "@ai-sdk/anthropic";
@@ -12,6 +12,7 @@ import type { LanguageModel } from "ai";
 import { wrapCodeAssist } from "./gemini-envelope";
 import { resolveGeminiProject } from "./gemini-project";
 import { proxiedProviders } from "./providers";
+import { clientFor } from "./storage";
 
 /**
  * The exact system prompt a Claude Code OAuth token requires.
@@ -65,25 +66,30 @@ export async function modelFor(
   }
 
   if (id === "claude") {
+    const tokens = await tokensFor("claude", accessToken);
+
     return createAnthropic({
       authToken: accessToken,
       baseURL: "/api/upstream/claude",
       // Claude's own descriptor already knows what an OAuth-bearer request
       // needs (the API version, and the beta flag that opts into accepting
       // Authorization at all) — read off it rather than repeating it here.
-      headers: proxiedProviders.claude.apiHeaders?.({} as TokenSet),
+      headers: proxiedProviders.claude.apiHeaders?.(tokens),
     })(modelId);
   }
 
   if (id === "openai") {
+    const tokens = await tokensFor("openai", accessToken);
+
     return createOpenAI({
       apiKey: accessToken,
       baseURL: "/api/upstream/openai",
-      fetch: codexFetch(),
-      headers: {
-        "OpenAI-Beta": "responses=experimental",
-        originator: "codex_cli_rs",
-      },
+      fetch: codexFetch(tokens),
+      // The descriptor's apiHeaders also supplies chatgpt-account-id when
+      // the token names one — a subscription token has to name the account
+      // it is billed against, and hardcoding just the other two headers
+      // silently dropped it.
+      headers: proxiedProviders.openai.apiHeaders?.(tokens),
     }).responses(modelId);
   }
 
@@ -122,6 +128,46 @@ const withoutApiKeyHeader: typeof fetch = (url, init) => {
 };
 
 /**
+ * The full `TokenSet` for a provider, not just the bare access token
+ * `sendMessages` hands `modelFor`.
+ *
+ * Descriptor hooks like `apiHeaders` key off fields — Codex's `accountId`,
+ * in particular — that live only on the full record the sign-in flow wrote
+ * to storage, not on a token string alone. Reading it back from the same
+ * client the rest of the app already uses (`clientFor`, from `storage.ts`)
+ * gets the real thing instead of reconstructing a stub that can only ever
+ * have the fields already in scope.
+ *
+ * Falls back to a minimal stand-in when storage has nothing, or has a
+ * different token than the one this call is actually using (a refresh
+ * mid-flight, say) — attaching another account's `accountId` to this
+ * request would be worse than sending none.
+ */
+async function tokensFor(id: string, accessToken: string): Promise<TokenSet> {
+  const stored = await clientFor(id).getTokens();
+
+  if (stored?.accessToken === accessToken) {
+    return stored;
+  }
+
+  return { accessToken, provider: id, raw: {}, tokenType: "bearer" };
+}
+
+type CachedCopilotCredential = {
+  credential: ResolvedCredential;
+  expiresAt: number;
+};
+
+/** One exchange per `ghu_` token; see `copilotCredentialFor` for why. */
+const copilotCredentials = new Map<string, CachedCopilotCredential>();
+
+/** Renew this far ahead of the credential's real expiry, to absorb latency. */
+const COPILOT_EXPIRY_SKEW_MS = 60_000;
+
+/** A `ghu_` token GitHub never handed an expiry for is assumed valid this long. */
+const COPILOT_DEFAULT_TTL_MS = 25 * 60 * 1000;
+
+/**
  * The credential a `ghu_` GitHub token grants is not the one Copilot's API
  * accepts — that has to be exchanged for a short-lived Copilot token first,
  * which is what carries the descriptor's `Copilot-Integration-Id` header
@@ -130,12 +176,22 @@ const withoutApiKeyHeader: typeof fetch = (url, init) => {
  * free.
  *
  * The exchange call itself goes straight to `api.github.com`, never through
- * our proxy, so the `ghu_` token travels only to GitHub.
+ * our proxy, so the `ghu_` token travels only to GitHub — but that also
+ * means it is the one round trip in this file with no proxy caching or
+ * retry logic backing it up, so it is cached here rather than repeated on
+ * every message: the resulting token is valid for roughly 25 minutes, and
+ * re-exchanging on every turn would multiply both latency and rate-limit
+ * exposure on the path we control least.
  */
-async function copilotModel(
-  modelId: string,
+async function copilotCredentialFor(
   accessToken: string
-): Promise<LanguageModel> {
+): Promise<ResolvedCredential> {
+  const cached = copilotCredentials.get(accessToken);
+
+  if (cached && Date.now() < cached.expiresAt - COPILOT_EXPIRY_SKEW_MS) {
+    return cached.credential;
+  }
+
   const provider = proxiedProviders["github-copilot"];
   const tokens = {
     accessToken,
@@ -151,6 +207,20 @@ async function copilotModel(
       "The github-copilot descriptor has no credential exchange."
     );
   }
+
+  copilotCredentials.set(accessToken, {
+    credential,
+    expiresAt: credential.expiresAt ?? Date.now() + COPILOT_DEFAULT_TTL_MS,
+  });
+
+  return credential;
+}
+
+async function copilotModel(
+  modelId: string,
+  accessToken: string
+): Promise<LanguageModel> {
+  const credential = await copilotCredentialFor(accessToken);
 
   return createOpenAICompatible({
     baseURL: "/api/upstream/github-copilot",
@@ -169,12 +239,16 @@ async function copilotModel(
  * stateless and answers one with a silent empty stream rather than an error,
  * so `normalizeCodexResponsesBody` (the SDK's own fix for this, ordinarily
  * applied by `createAuthenticatedFetch`) is applied by hand here instead. A
- * `client_version` query parameter is added the same way, since it is what
- * gates which models the account can see.
+ * query parameter is added the same way, read off the descriptor's
+ * `apiQuery` rather than repeating the `client_version` value it already
+ * carries — it is what gates which models the account can see.
  */
-function codexFetch(inner: typeof fetch = fetch): typeof fetch {
+function codexFetch(
+  tokens: TokenSet,
+  inner: typeof fetch = fetch
+): typeof fetch {
   return (url, init) => {
-    const target = withClientVersion(url);
+    const target = withQuery(url, proxiedProviders.openai.apiQuery?.(tokens));
 
     if (typeof init?.body !== "string") {
       return inner(target, init);
@@ -198,18 +272,22 @@ function codexFetch(inner: typeof fetch = fetch): typeof fetch {
   };
 }
 
-function withClientVersion(
-  url: string | URL | Request
+/** Merges `extra` into `url`'s query string, without overriding a param the caller already set. */
+function withQuery(
+  url: string | URL | Request,
+  extra: Record<string, string> | undefined
 ): string | URL | Request {
-  if (typeof url !== "string") {
+  if (typeof url !== "string" || !extra) {
     return url;
   }
 
   const [path, query] = url.split("?");
   const params = new URLSearchParams(query ?? "");
 
-  if (!params.has("client_version")) {
-    params.set("client_version", codexClientVersion);
+  for (const [key, value] of Object.entries(extra)) {
+    if (!params.has(key)) {
+      params.set(key, value);
+    }
   }
 
   return `${path}?${params.toString()}`;
