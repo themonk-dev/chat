@@ -527,10 +527,7 @@ function ModelSelectorOption({
 /** One connected provider's models, in the order they should be grouped. */
 type ModelGroup = { providerId: string; models: Model[] };
 
-function useModelGroups(): {
-  connected: Map<string, string>;
-  groups: ModelGroup[];
-} {
+function useModelGroups(): { groups: ModelGroup[] } {
   const connected = useConnectedProviders();
   const [fetched, setFetched] = useState<Record<string, Model[]>>({});
 
@@ -558,7 +555,7 @@ function useModelGroups(): {
     providerId: id,
   }));
 
-  return { connected, groups };
+  return { groups };
 }
 
 function PureModelSelectorCompact({

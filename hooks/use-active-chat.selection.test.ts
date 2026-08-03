@@ -77,28 +77,54 @@ describe("useConnectedProviders", () => {
   });
 
   /**
-   * The disconnect-recovery half of the same bug (finding 2): a provider
-   * that was never touched by this transition (openrouter, connected from
-   * earlier in the session) must not be wiped out just because a
-   * different provider became active with no tokens of its own.
+   * The half of the bug finding 2 was actually about: a provider becomes
+   * active while `tokens` is still stale/undefined (describing whatever the
+   * previous active provider's tokens looked like), and storage genuinely
+   * does hold a token for the newly active one. Pre-fix, the mirror trusted
+   * `tokens` at face value and deleted the newly active provider's entry —
+   * even though it was already correctly connected — because "undefined"
+   * looks identical to "not connected yet" whether or not that's true.
+   *
+   * The mount-time full poll is established *first* and its `waitFor`
+   * settled before the stale transition is triggered, specifically so that
+   * poll — a separate, always-correct, but mount-only effect — cannot mask
+   * the mirror's mistake by re-running afterward and quietly fixing it. It
+   * only ever runs once; by the time the stale commit lands, there is
+   * nothing left to self-correct a wrong delete.
    */
-  it("does not drop an unrelated already-connected provider while a new one activates", async () => {
+  it("re-confirms a newly active provider's token instead of trusting stale tokens", async () => {
+    mockUseProviderAuth.mockReturnValue({
+      activeId: "openrouter",
+      tokens: { accessToken: "openrouter-secret", provider: "openrouter" },
+    });
+    mockGetTokens.mockImplementation((id: string) =>
+      Promise.resolve(
+        id === "claude"
+          ? { accessToken: "claude-secret", provider: "claude" }
+          : id === "openrouter"
+            ? { accessToken: "openrouter-secret", provider: "openrouter" }
+            : undefined
+      )
+    );
+
+    const { result, rerender } = renderHook(() => useConnectedProviders());
+
+    // Baseline, from the mount-time poll alone: claude is already
+    // connected, before the provider switch under test ever happens.
+    await waitFor(() => {
+      expect(result.current.get("claude")).toBe("claude-secret");
+    });
+
+    // The exact staleness commit: setActiveId("claude") has landed, but
+    // useProviderAuth's own async refresh has not resolved yet.
     mockUseProviderAuth.mockReturnValue({
       activeId: "claude",
       tokens: undefined,
     });
-    mockGetTokens.mockImplementation((id: string) =>
-      Promise.resolve(
-        id === "openrouter"
-          ? { accessToken: "openrouter-secret", provider: "openrouter" }
-          : undefined
-      )
-    );
-
-    const { result } = renderHook(() => useConnectedProviders());
+    rerender();
 
     await waitFor(() => {
-      expect(result.current.get("openrouter")).toBe("openrouter-secret");
+      expect(result.current.get("claude")).toBe("claude-secret");
     });
   });
 });
