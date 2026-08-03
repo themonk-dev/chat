@@ -13,6 +13,7 @@ import { PROVIDER_ORDER, registry } from "@/lib/oauth/registry";
 import { clientFor } from "@/lib/oauth/storage";
 import { cn } from "@/lib/utils";
 import { CheckCircleFillIcon, ChevronDownIcon } from "./icons";
+import { providerLogos } from "./provider-logos";
 
 /**
  * Which providers already hold a token, independent of which one is active.
@@ -84,6 +85,8 @@ function ProviderSelectorItem({
     onSelect(id);
   }, [id, onSelect]);
 
+  const Logo = providerLogos[id];
+
   return (
     <DropdownMenuItem
       className="group/item flex flex-row items-center justify-between gap-4"
@@ -99,6 +102,7 @@ function ProviderSelectorItem({
             connected ? "bg-emerald-500" : "bg-border"
           )}
         />
+        {Logo ? <Logo className="size-4 shrink-0" /> : null}
         {registry[id].label}
       </div>
       <div className="text-foreground opacity-0 group-data-[active=true]/item:opacity-100 dark:text-foreground">
@@ -114,6 +118,7 @@ export function ProviderSelector({
   const [open, setOpen] = useState(false);
   const { activeId, setActiveId } = useProviderAuth();
   const connectedIds = useConnectedProviders(open);
+  const ActiveLogo = providerLogos[activeId];
 
   return (
     <DropdownMenu onOpenChange={setOpen} open={open}>
@@ -130,6 +135,7 @@ export function ProviderSelector({
           size="sm"
           variant="outline"
         >
+          {ActiveLogo ? <ActiveLogo className="size-4 shrink-0" /> : null}
           {registry[activeId].label}
           <ChevronDownIcon />
         </Button>
