@@ -9,6 +9,7 @@ import {
   type Dispatch,
   type ReactNode,
   type SetStateAction,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -18,7 +19,7 @@ import {
 import { useDataStream } from "@/components/chat/data-stream-provider";
 import { toast } from "@/components/chat/toast";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
-import { readChat, writeChat } from "@/lib/chats/store";
+import { deleteChat, readChat, writeChat } from "@/lib/chats/store";
 import { ChatbotError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
 import { fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
@@ -37,6 +38,7 @@ type ActiveChatContextValue = {
   isLoading: boolean;
   currentModelId: string;
   setCurrentModelId: (id: string) => void;
+  clearChat: () => void;
 };
 
 const ActiveChatContext = createContext<ActiveChatContextValue | null>(null);
@@ -231,10 +233,27 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
     lastPersistedCountRef.current = messages.length;
   }, [chatId, messages, status]);
 
+  /**
+   * The one place that knows both halves of "clear": the in-memory
+   * transcript lives here, and so does the baseline the persist effect
+   * compares against. Clearing only the messages (leaving the ref at its
+   * pre-clear count) would make the next exchange invisible to
+   * `shouldPersistChat` whenever it happens to land back on the same
+   * count — self-healing, intermittent, and nasty to diagnose. Resetting
+   * the baseline to 0 here, in the same place the store entry is deleted,
+   * keeps them consistent with what is actually stored: nothing.
+   */
+  const clearChat = useCallback(() => {
+    setMessages(() => []);
+    deleteChat(chatId);
+    lastPersistedCountRef.current = 0;
+  }, [chatId, setMessages]);
+
   const value = useMemo<ActiveChatContextValue>(
     () => ({
       addToolApprovalResponse,
       chatId,
+      clearChat,
       currentModelId,
       input,
       isLoading: false,
@@ -249,6 +268,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
     }),
     [
       chatId,
+      clearChat,
       messages,
       setMessages,
       sendMessage,

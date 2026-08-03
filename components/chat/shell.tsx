@@ -12,6 +12,7 @@ import { MultimodalInput } from "./multimodal-input";
 export function ChatShell() {
   const {
     chatId,
+    clearChat,
     messages,
     setMessages,
     sendMessage,
@@ -100,6 +101,7 @@ export function ChatShell() {
               <MultimodalInput
                 attachments={attachments}
                 chatId={chatId}
+                clearChat={clearChat}
                 editingMessage={editingMessage}
                 input={input}
                 isLoading={isLoading}

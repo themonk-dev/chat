@@ -71,6 +71,7 @@ function setCookie(name: string, value: string) {
 
 function PureMultimodalInput({
   chatId,
+  clearChat,
   input,
   setInput,
   status,
@@ -88,6 +89,7 @@ function PureMultimodalInput({
   isLoading,
 }: {
   chatId: string;
+  clearChat: () => void;
   input: string;
   setInput: Dispatch<SetStateAction<string>>;
   status: UseChatHelpers<ChatMessage>["status"];
@@ -167,8 +169,7 @@ function PureMultimodalInput({
           router.push("/");
           break;
         case "clear":
-          setMessages(() => []);
-          deleteChat(chatId);
+          clearChat();
           break;
         case "rename":
           toast("Rename is available from the sidebar chat menu.");
@@ -213,7 +214,7 @@ function PureMultimodalInput({
           break;
       }
     },
-    [chatId, resolvedTheme, router, setInput, setMessages, setTheme]
+    [chatId, clearChat, resolvedTheme, router, setInput, setTheme]
   );
 
   const submitForm = useCallback(() => {

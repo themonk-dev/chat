@@ -54,4 +54,33 @@ describe("shouldPersistChat", () => {
       })
     ).toBe(true);
   });
+
+  it("persists a post-clear exchange even if the count returns to its pre-clear value", () => {
+    // A thread with 2 stored messages is cleared. clearChat() resets the
+    // baseline to 0, matching what is actually stored: nothing. The user
+    // then sends one message and gets one reply, landing back on a count
+    // of 2 — the same number as before the clear, but genuinely new
+    // content that must not be mistaken for "nothing changed".
+    expect(
+      shouldPersistChat({
+        lastPersistedCount: 0,
+        messageCount: 2,
+        status: "ready",
+      })
+    ).toBe(true);
+  });
+
+  it("regression guard: a stale pre-clear baseline would wrongly skip that exchange", () => {
+    // This is the bug clearChat() fixes: if the baseline were left at its
+    // pre-clear value of 2 instead of being reset to 0, a post-clear
+    // exchange that also nets 2 messages would be indistinguishable from
+    // "nothing happened" and silently never persisted.
+    expect(
+      shouldPersistChat({
+        lastPersistedCount: 2,
+        messageCount: 2,
+        status: "ready",
+      })
+    ).toBe(false);
+  });
 });
