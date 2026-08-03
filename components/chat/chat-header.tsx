@@ -8,11 +8,7 @@ import { AuthenticateButton } from "./authenticate-button";
 import { ProviderSelector } from "./provider-selector";
 
 function PureChatHeader() {
-  const { state, toggleSidebar, isMobile } = useSidebar();
-
-  if (state === "collapsed" && !isMobile) {
-    return null;
-  }
+  const { toggleSidebar } = useSidebar();
 
   return (
     <header className="sticky top-0 flex h-14 items-center gap-2 bg-sidebar px-3">
