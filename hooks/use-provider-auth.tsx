@@ -82,39 +82,70 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
     sessionStorage.setItem(ACTIVE_KEY, id);
   }, []);
 
+  /**
+   * `pending` must never outlive the attempt that set it: a device code that
+   * gets denied or times out, or a popup the reader closes, has to leave the
+   * dialog able to react rather than stuck showing a code that can no longer
+   * be redeemed. Popup and device both resolve or fail within this call, so
+   * `finally` clears `pending` unconditionally once either is done — for
+   * popup that is a no-op most of the time, but it is one line of insurance
+   * against a stray value from whatever ran before.
+   *
+   * Paste is the exception: `setPending` here is not cleanup, it is the
+   * successful outcome of this step — the flow is not over, it is handed to
+   * `submitCode`. Only a failure to even get that far clears it, and the
+   * error is rethrown rather than swallowed either way, so the caller (the
+   * dialog) can show it instead of guessing from a reset `pending`.
+   */
   const connect = useCallback(async () => {
     const { flow } = registry[activeId];
     const provider = proxiedProviders[activeId];
 
     if (flow === "popup") {
-      const result = await loginWithPopup(provider, { storage: tokenStorage });
-      setTokens(result);
+      try {
+        const result = await loginWithPopup(provider, {
+          storage: tokenStorage,
+        });
+        setTokens(result);
+      } finally {
+        setPending(undefined);
+      }
 
       return;
     }
 
     if (flow === "device") {
       const client = clientFor(activeId);
-      const result = await client.deviceLogin({
-        onCode: (device) => {
-          setPending({
-            kind: "device",
-            userCode: device.userCode,
-            verificationUri:
-              device.verificationUriComplete ?? device.verificationUri,
-          });
-        },
-      });
-      setTokens(result);
-      setPending(undefined);
+
+      try {
+        const result = await client.deviceLogin({
+          onCode: (device) => {
+            setPending({
+              kind: "device",
+              userCode: device.userCode,
+              verificationUri:
+                device.verificationUriComplete ?? device.verificationUri,
+            });
+          },
+        });
+        setTokens(result);
+      } finally {
+        setPending(undefined);
+      }
 
       return;
     }
 
     const client = clientFor(activeId);
-    const { url } = await client.createAuthorization();
-    window.open(url, "_blank", "noopener,noreferrer");
-    setPending({ kind: "paste", url });
+
+    try {
+      const { url } = await client.createAuthorization();
+      window.open(url, "_blank", "noopener,noreferrer");
+      setPending({ kind: "paste", url });
+    } catch (error) {
+      setPending(undefined);
+      throw error;
+    }
   }, [activeId]);
 
   /**
@@ -125,14 +156,23 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
    * `code#state`, Gemini's unreachable `http://localhost/...` — so
    * re-implementing that parsing here would only be a second copy that can
    * drift from the SDK's.
+   *
+   * This is the flow's last step either way. A rejected code (expired,
+   * mistyped, already consumed) ends the attempt exactly like success does, so
+   * `pending` is cleared in `finally` regardless of outcome — the dialog is
+   * not left stranded on a code that can never be resubmitted successfully —
+   * and the error is left to propagate so the dialog can show it.
    */
   const submitCode = useCallback(
     async (code: string) => {
-      const result = await clientFor(activeId).completeAuthorization({
-        callbackUrl: code.trim(),
-      });
-      setTokens(result);
-      setPending(undefined);
+      try {
+        const result = await clientFor(activeId).completeAuthorization({
+          callbackUrl: code.trim(),
+        });
+        setTokens(result);
+      } finally {
+        setPending(undefined);
+      }
     },
     [activeId]
   );
