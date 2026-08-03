@@ -29,15 +29,13 @@ import {
   ModelSelectorName,
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector";
-import { useConnectedProviders } from "@/hooks/use-active-chat";
+import {
+  getSelectionProviderId,
+  useConnectedProviders,
+} from "@/hooks/use-active-chat";
 import { useProviderAuth } from "@/hooks/use-provider-auth";
 import { deleteChat, listChats } from "@/lib/chats/store";
-import {
-  defaultModelFor,
-  fetchModelsFor,
-  type Model,
-  modelsFor,
-} from "@/lib/oauth/models";
+import { fetchModelsFor, type Model, modelsFor } from "@/lib/oauth/models";
 import { PROVIDER_ORDER, registry } from "@/lib/oauth/registry";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -572,28 +570,23 @@ function PureModelSelectorCompact({
 }) {
   const [open, setOpen] = useState(false);
   const { setActiveId } = useProviderAuth();
-  const { connected, groups } = useModelGroups();
+  const { groups } = useModelGroups();
 
   /**
-   * Selecting a row here always knows its provider directly, and stashes it
-   * so this render and every one after it can answer "whose model is this"
-   * without re-deriving anything. The chat context can also move
-   * `selectedModelId` on its own — connecting the first provider, or
-   * recovering after the owning provider disconnects — and both of those
-   * always land on `defaultModelFor` of the first connected provider in
-   * `PROVIDER_ORDER`; the `else` branch mirrors that exact lookup so the
-   * trigger's mark stays correct without a field on the chat context for it
-   * (the context is frozen at 14 members).
+   * `getSelectionProviderId()` (from `hooks/use-active-chat.tsx`) is the
+   * authoritative answer: it is written in lockstep with `currentModelId`
+   * — the same `setCurrentModelId` call this component's own `onModelChange`
+   * triggers, and the same recovery effect that moves `currentModelId` on
+   * its own (connecting the first provider, recovering after the owning
+   * provider disconnects). A component-local ref here previously stood in
+   * for that answer, but `MultimodalInput` remounts on `/` <-> `/chat/[id]`
+   * navigation while the chat context above it does not, so the ref lost
+   * the association on every such navigation even though the selection
+   * itself was still live. Reading the module-level mirror instead survives
+   * exactly as long as `currentModelId` does, without adding a 15th member
+   * to the frozen context contract.
    */
-  const selectionRef = useRef<{ modelId: string; providerId: string }>();
-  let selectedProviderId: string | undefined;
-  if (selectionRef.current?.modelId === selectedModelId) {
-    selectedProviderId = selectionRef.current.providerId;
-  } else {
-    selectedProviderId = PROVIDER_ORDER.find(
-      (id) => connected.has(id) && defaultModelFor(id) === selectedModelId
-    );
-  }
+  const selectedProviderId = getSelectionProviderId();
 
   const selectedModel = selectedProviderId
     ? (
@@ -604,7 +597,6 @@ function PureModelSelectorCompact({
 
   const handleSelect = useCallback(
     (providerId: string, model: Model) => {
-      selectionRef.current = { modelId: model.id, providerId };
       setActiveId(providerId);
       onModelChange?.(model.id, providerId);
       setCookie("chat-model", model.id);

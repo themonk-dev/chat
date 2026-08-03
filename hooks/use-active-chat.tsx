@@ -58,10 +58,11 @@ export type ConnectedProviders = Map<string, string>;
 /**
  * Which providers currently hold a token, independent of which one is
  * active — the same problem `components/chat/provider-selector.tsx` solves
- * for its connection dots, via the same two-part answer: `useProviderAuth`
- * already re-checks the *active* provider's token on every `activeId`
- * change, so that transition is mirrored into the map for free; everything
- * else is invisible to it and has to be read from storage directly.
+ * for its connection dots, via a similar two-part answer: the *active*
+ * provider's entry is kept current reactively (see the first effect below
+ * for why that re-reads storage itself rather than trusting
+ * `useProviderAuth`'s `tokens` directly); everything else is invisible to
+ * it and has to be read from storage directly.
  *
  * That file only does the storage read while its menu is open, since
  * nothing needs the full set before then. Here, both callers (the picker's
@@ -73,16 +74,59 @@ export function useConnectedProviders(): ConnectedProviders {
   const { activeId, tokens } = useProviderAuth();
   const [connected, setConnected] = useState<ConnectedProviders>(new Map());
 
+  /**
+   * Re-reads storage for `activeId` directly rather than trusting `tokens`
+   * from `useProviderAuth`. `tokens` genuinely lags `activeId` by a commit:
+   * `setActiveId` does not clear it, and `useProviderAuth` only replaces it
+   * once its own async `clientFor(activeId).getTokens()` resolves. On the
+   * very commit `activeId` changes, `tokens` is still the *previous*
+   * provider's `TokenSet` — trusting it here would file that token under the
+   * new `activeId`, which is exactly how one provider's OAuth token ends up
+   * addressed to another provider's API host two hops downstream, through
+   * `fetchModelsFor` -> `GET /api/upstream/<newProvider>/models` carrying
+   * the old provider's bearer token.
+   *
+   * A "does `tokens.provider` match `activeId`" check would catch that
+   * mismatch when `tokens` is a stale-but-present `TokenSet`, but not the
+   * mirror case: `tokens` genuinely undefined (the previous provider was
+   * disconnected) is indistinguishable, by a tag alone, from "no answer yet
+   * for the new provider" — and wrongly deleting a *different*, genuinely
+   * connected provider's entry is the disconnect-recovery bug (a model
+   * picked from a provider that was never touched silently reverting).
+   * Re-reading independently sidesteps both: `tokens` stays in the
+   * dependency array purely as a trigger — connecting a provider that is
+   * already active changes `tokens` without changing `activeId`, and that
+   * transition still has to be picked up — but the value written for `id`
+   * always comes from asking storage about `id` itself, and a superseded
+   * read (`activeId` having moved on again before this one resolves) is
+   * dropped rather than applied.
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: tokens is a deliberate trigger-only dependency, not read in the body — see the comment above.
   useEffect(() => {
-    setConnected((previous) => {
-      const next = new Map(previous);
-      if (tokens?.accessToken) {
-        next.set(activeId, tokens.accessToken);
-      } else {
-        next.delete(activeId);
-      }
-      return next;
-    });
+    let cancelled = false;
+    const id = activeId;
+
+    clientFor(id)
+      .getTokens()
+      .catch(() => undefined)
+      .then((found) => {
+        if (cancelled) {
+          return;
+        }
+        setConnected((previous) => {
+          const next = new Map(previous);
+          if (found?.accessToken) {
+            next.set(id, found.accessToken);
+          } else {
+            next.delete(id);
+          }
+          return next;
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeId, tokens]);
 
   useEffect(() => {
@@ -118,6 +162,75 @@ export function useConnectedProviders(): ConnectedProviders {
   }, []);
 
   return connected;
+}
+
+/**
+ * Which provider `currentModelId` was picked from, mirrored outside React
+ * state.
+ *
+ * `ActiveChatProvider` itself does not remount when the route changes
+ * between `/` and `/chat/[id]` — only its descendants do, including
+ * `MultimodalInput` and the model picker inside it. A component-local ref
+ * in the picker loses the model-to-provider association on every such
+ * navigation, even though `currentModelId` itself survives untouched in
+ * this provider one level up: the picker would render "Select a model"
+ * for a selection that is still live and sendable. A module-level value,
+ * written in lockstep with `currentModelId` — by the same
+ * `setCurrentModelId` call and the same recovery effect below, never a
+ * separate write — survives exactly as long as `currentModelId` does,
+ * without adding a 15th member to the frozen context contract.
+ */
+let lastSelectionProviderId: string | undefined;
+
+/** Read-only outside this module; only `ActiveChatProvider` writes it. */
+export function getSelectionProviderId(): string | undefined {
+  return lastSelectionProviderId;
+}
+
+export type SelectionOutcome =
+  | { kind: "keep" }
+  | { kind: "clear" }
+  | { kind: "set"; modelId: string; providerId: string };
+
+/**
+ * The pure half of the recovery effect below: given the current connection
+ * map, the current selection, and which provider that selection belongs to,
+ * decides what (if anything) should change. Extracted the same way
+ * `shouldPersistChat` was — the effect's job shrinks to applying the
+ * decision (writing the ref, the module mirror, `setActiveId`), which is
+ * the part that actually needs a DOM/React environment to exercise.
+ *
+ * `PROVIDER_ORDER` is the fallback order deliberately, not connection
+ * recency or any other ordering: it is the same order the provider
+ * dropdown lists, so "which provider did the picker fall back to" reads as
+ * the same list a reader already understands, not a hidden recency queue.
+ */
+export function nextSelection({
+  connected,
+  currentModelId,
+  owner,
+}: {
+  connected: ConnectedProviders;
+  currentModelId: string;
+  owner: string | undefined;
+}): SelectionOutcome {
+  const ownerStillConnected = owner !== undefined && connected.has(owner);
+
+  if (currentModelId && ownerStillConnected) {
+    return { kind: "keep" };
+  }
+
+  const fallback = PROVIDER_ORDER.find((id) => connected.has(id));
+
+  if (fallback) {
+    return {
+      kind: "set",
+      modelId: defaultModelFor(fallback),
+      providerId: fallback,
+    };
+  }
+
+  return currentModelId ? { kind: "clear" } : { kind: "keep" };
 }
 
 const ActiveChatContext = createContext<ActiveChatContextValue | null>(null);
@@ -266,7 +379,14 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
     currentModelIdRef.current = currentModelId;
   }, [currentModelId]);
 
-  /** Which provider `currentModelId` was picked from — see `setCurrentModelId`. */
+  /**
+   * Which provider `currentModelId` was picked from — see `setCurrentModelId`.
+   * Every write here has a matching write to `lastSelectionProviderId`
+   * (the module-level mirror above): this ref is the value the recovery
+   * effect below reads back on its own next run, the module value is the
+   * same answer exposed to components outside this provider that need it
+   * to survive a remount this component itself does not undergo.
+   */
   const currentModelProviderRef = useRef<string | undefined>(undefined);
 
   const { activeId, tokens, setActiveId } = useProviderAuth();
@@ -291,9 +411,9 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
    */
   const setCurrentModelId = useCallback(
     (id: string, providerId?: string) => {
-      currentModelProviderRef.current = id
-        ? (providerId ?? activeId)
-        : undefined;
+      const owner = id ? (providerId ?? activeId) : undefined;
+      currentModelProviderRef.current = owner;
+      lastSelectionProviderId = owner;
       setCurrentModelIdState(id);
     },
     [activeId]
@@ -302,40 +422,34 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
   const connected = useConnectedProviders();
 
   /**
-   * Keeps `currentModelId` pointed at something actually usable.
-   *
-   * A no-op is the common case: once a model is selected, its owning
-   * provider stays connected, and switching *away* from that provider
-   * without disconnecting it — the ordinary case of looking at something
-   * else — must not disturb the selection. Only two situations act:
-   *
-   * - Nothing usable is selected yet (a fresh session, or a session that
-   *   never had a provider connected) and a provider's tokens are found —
-   *   pick that provider's default model.
-   * - The provider that owned the selected model disconnects — fall back to
-   *   another connected provider's default, in `PROVIDER_ORDER`, or clear
-   *   the selection if none remain. The active provider is moved to match,
-   *   since a stale `activeId` would otherwise send the new selection's
-   *   model id to the old provider's API.
+   * Applies `nextSelection`'s decision. A no-op (`"keep"`) is the common
+   * case: once a model is selected, its owning provider stays connected,
+   * and switching *away* from that provider without disconnecting it — the
+   * ordinary case of looking at something else — must not disturb the
+   * selection. `"set"` covers both nothing usable being selected yet (a
+   * fresh session, or one that never had a provider connected) and the
+   * owning provider having disconnected; either way the active provider is
+   * moved to match, since a stale `activeId` would otherwise send the new
+   * selection's model id to the old provider's API. `"clear"` is the same
+   * disconnect with nothing left to fall back to.
    */
   useEffect(() => {
-    const owner = currentModelProviderRef.current;
-    const ownerStillConnected = owner !== undefined && connected.has(owner);
+    const outcome = nextSelection({
+      connected,
+      currentModelId,
+      owner: currentModelProviderRef.current,
+    });
 
-    if (currentModelId && ownerStillConnected) {
-      return;
-    }
-
-    const fallback = PROVIDER_ORDER.find((id) => connected.has(id));
-
-    if (fallback) {
-      currentModelProviderRef.current = fallback;
-      setCurrentModelIdState(defaultModelFor(fallback));
-      if (activeId !== fallback) {
-        setActiveId(fallback);
+    if (outcome.kind === "set") {
+      currentModelProviderRef.current = outcome.providerId;
+      lastSelectionProviderId = outcome.providerId;
+      setCurrentModelIdState(outcome.modelId);
+      if (activeId !== outcome.providerId) {
+        setActiveId(outcome.providerId);
       }
-    } else if (currentModelId) {
+    } else if (outcome.kind === "clear") {
       currentModelProviderRef.current = undefined;
+      lastSelectionProviderId = undefined;
       setCurrentModelIdState("");
     }
   }, [connected, currentModelId, activeId, setActiveId]);
