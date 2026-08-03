@@ -3,20 +3,13 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import type { UIMessage } from "ai";
 import equal from "fast-deep-equal";
-import {
-  ArrowUpIcon,
-  BrainIcon,
-  EyeIcon,
-  LockIcon,
-  WrenchIcon,
-} from "lucide-react";
+import { ArrowUpIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
   type ChangeEvent,
   type Dispatch,
   memo,
-  type ReactNode,
   type SetStateAction,
   useCallback,
   useEffect,
@@ -24,27 +17,26 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
-import useSWR from "swr";
 import { useLocalStorage, useWindowSize } from "usehooks-ts";
 import {
   ModelSelector,
   ModelSelectorContent,
+  ModelSelectorEmpty,
   ModelSelectorGroup,
   ModelSelectorInput,
   ModelSelectorItem,
   ModelSelectorList,
-  ModelSelectorLogo,
   ModelSelectorName,
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector";
-import { useProviderAuth } from "@/hooks/use-provider-auth";
 import {
-  type ChatModel,
-  chatModels,
-  DEFAULT_CHAT_MODEL,
-  type ModelCapabilities,
-} from "@/lib/ai/models";
+  getSelectionProviderId,
+  useConnectedProviders,
+} from "@/hooks/use-active-chat";
+import { useProviderAuth } from "@/hooks/use-provider-auth";
 import { deleteChat, listChats } from "@/lib/chats/store";
+import { fetchModelsFor, type Model, modelsFor } from "@/lib/oauth/models";
+import { PROVIDER_ORDER, registry } from "@/lib/oauth/registry";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
@@ -57,6 +49,7 @@ import {
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { StopIcon } from "./icons";
+import { providerLogos } from "./provider-logos";
 import {
   type SlashCommand,
   SlashCommandMenu,
@@ -104,7 +97,7 @@ function PureMultimodalInput({
     | (() => Promise<void>);
   className?: string;
   selectedModelId: string;
-  onModelChange?: (modelId: string) => void;
+  onModelChange?: (modelId: string, providerId: string) => void;
   editingMessage?: ChatMessage | null;
   onCancelEdit?: () => void;
   isLoading?: boolean;
@@ -455,106 +448,114 @@ export const MultimodalInput = memo(
   }
 );
 
-function ModelSelectorOption({
-  capabilities,
-  curated,
-  model,
-  onModelChange,
-  selectedModelId,
-  setOpen,
+/**
+ * cmdk filters and tracks selection by this string, so it has to be unique
+ * per row (providers can and do resell the same model under the same
+ * display name — see `ProviderMark` below) while still containing the text a
+ * reader would actually type to search.
+ */
+function itemValue(providerId: string, model: Model): string {
+  return `${model.name} ${registry[providerId].label} ${providerId}:${model.id}`;
+}
+
+/**
+ * The provider mark shown on every row, not just the group heading: two
+ * connected providers can resell the same underlying model under the same
+ * display name (GitHub Copilot and OpenRouter both carry "Claude Sonnet
+ * 4.5"), and cmdk's search collapses the grouping that would otherwise
+ * disambiguate them. `providerLogos`' SVGs are `aria-hidden` by design — they
+ * are normally read beside a visible text label — but a row's mark can be
+ * the only provider signal left once the list is filtered, so it gets its
+ * own accessible name via a wrapping `role="img"` rather than inheriting the
+ * hidden state from the SVG it wraps.
+ */
+function ProviderMark({
+  className,
+  providerId,
 }: {
-  capabilities: Record<string, ModelCapabilities> | undefined;
-  curated: boolean;
-  model: ChatModel;
-  onModelChange?: (modelId: string) => void;
-  selectedModelId: string;
-  setOpen: Dispatch<SetStateAction<boolean>>;
+  className?: string;
+  providerId: string;
 }) {
-  const [logoProvider] = model.id.split("/");
-  const maybeWithTooltip = (icon: ReactNode, label: string) => {
-    if (!curated) {
-      return icon;
-    }
+  const Logo = providerLogos[providerId];
 
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex">{icon}</span>
-        </TooltipTrigger>
-        <TooltipContent side="top" sideOffset={8}>
-          {label}
-        </TooltipContent>
-      </Tooltip>
-    );
-  };
-  const handleSelect = useCallback(() => {
-    if (!curated) {
-      return;
-    }
-    onModelChange?.(model.id);
-    setCookie("chat-model", model.id);
-    setOpen(false);
-    setTimeout(() => {
-      document
-        .querySelector<HTMLTextAreaElement>("[data-testid='multimodal-input']")
-        ?.focus();
-    }, 50);
-  }, [curated, model.id, onModelChange, setOpen]);
-
-  const option = (
-    <ModelSelectorItem
-      aria-disabled={!curated}
-      className={cn(
-        "flex w-full transition-colors",
-        model.id === selectedModelId &&
-          "border-b border-dashed border-foreground/50",
-        curated
-          ? "data-[selected=true]:bg-muted data-[selected=true]:text-foreground"
-          : "cursor-not-allowed opacity-40 data-[selected=true]:bg-transparent data-[selected=true]:opacity-60 data-[selected=true]:ring-1 data-[selected=true]:ring-muted-foreground/30 data-[selected=true]:ring-inset"
-      )}
-      onSelect={handleSelect}
-      value={model.id}
-    >
-      <ModelSelectorLogo provider={logoProvider} />
-      <ModelSelectorName>{model.name}</ModelSelectorName>
-      <div className="ml-auto flex items-center gap-2 text-foreground/70">
-        {capabilities?.[model.id]?.tools
-          ? maybeWithTooltip(
-              <WrenchIcon className="size-3.5" />,
-              "Supports tool use"
-            )
-          : null}
-        {capabilities?.[model.id]?.vision
-          ? maybeWithTooltip(
-              <EyeIcon className="size-3.5" />,
-              "Supports vision"
-            )
-          : null}
-        {capabilities?.[model.id]?.reasoning
-          ? maybeWithTooltip(
-              <BrainIcon className="size-3.5" />,
-              "Supports reasoning"
-            )
-          : null}
-        {!curated && <LockIcon className="size-3 text-muted-foreground/50" />}
-      </div>
-    </ModelSelectorItem>
-  );
-
-  if (curated) {
-    return option;
+  if (!Logo) {
+    return null;
   }
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <div className="w-full cursor-not-allowed">{option}</div>
-      </TooltipTrigger>
-      <TooltipContent side="right" sideOffset={8}>
-        This model is not available in the demo.
-      </TooltipContent>
-    </Tooltip>
+    <span
+      aria-label={`${registry[providerId].label} logo`}
+      className="inline-flex shrink-0 items-center"
+      role="img"
+    >
+      <Logo className={className ?? "size-4"} />
+    </span>
   );
+}
+
+function ModelSelectorOption({
+  model,
+  onSelect,
+  providerId,
+  selected,
+}: {
+  model: Model;
+  onSelect: (providerId: string, model: Model) => void;
+  providerId: string;
+  selected: boolean;
+}) {
+  const handleSelect = useCallback(() => {
+    onSelect(providerId, model);
+  }, [model, onSelect, providerId]);
+
+  return (
+    <ModelSelectorItem
+      className={cn(
+        "flex w-full items-center gap-2 transition-colors",
+        "data-[selected=true]:bg-muted data-[selected=true]:text-foreground",
+        selected && "border-b border-dashed border-foreground/50"
+      )}
+      onSelect={handleSelect}
+      value={itemValue(providerId, model)}
+    >
+      <ProviderMark providerId={providerId} />
+      <ModelSelectorName>{model.name}</ModelSelectorName>
+    </ModelSelectorItem>
+  );
+}
+
+/** One connected provider's models, in the order they should be grouped. */
+type ModelGroup = { providerId: string; models: Model[] };
+
+function useModelGroups(): { groups: ModelGroup[] } {
+  const connected = useConnectedProviders();
+  const [fetched, setFetched] = useState<Record<string, Model[]>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    const entries = [...connected.entries()];
+
+    Promise.all(
+      entries.map(
+        async ([id, token]) => [id, await fetchModelsFor(id, token)] as const
+      )
+    ).then((results) => {
+      if (!cancelled) {
+        setFetched(Object.fromEntries(results));
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connected]);
+
+  const groups = PROVIDER_ORDER.filter((id) => connected.has(id)).map((id) => ({
+    models: fetched[id] ?? modelsFor(id),
+    providerId: id,
+  }));
+
+  return { groups };
 }
 
 function PureModelSelectorCompact({
@@ -562,25 +563,51 @@ function PureModelSelectorCompact({
   onModelChange,
 }: {
   selectedModelId: string;
-  onModelChange?: (modelId: string) => void;
+  onModelChange?: (modelId: string, providerId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const { data: modelsData } = useSWR(
-    `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/models`,
-    (url: string) => fetch(url).then((r) => r.json()),
-    { dedupingInterval: 3_600_000, revalidateOnFocus: false }
+  const { setActiveId } = useProviderAuth();
+  const { groups } = useModelGroups();
+
+  /**
+   * `getSelectionProviderId()` (from `hooks/use-active-chat.tsx`) is the
+   * authoritative answer: it is written in lockstep with `currentModelId`
+   * — the same `setCurrentModelId` call this component's own `onModelChange`
+   * triggers, and the same recovery effect that moves `currentModelId` on
+   * its own (connecting the first provider, recovering after the owning
+   * provider disconnects). A component-local ref here previously stood in
+   * for that answer, but `MultimodalInput` remounts on `/` <-> `/chat/[id]`
+   * navigation while the chat context above it does not, so the ref lost
+   * the association on every such navigation even though the selection
+   * itself was still live. Reading the module-level mirror instead survives
+   * exactly as long as `currentModelId` does, without adding a 15th member
+   * to the frozen context contract.
+   */
+  const selectedProviderId = getSelectionProviderId();
+
+  const selectedModel = selectedProviderId
+    ? (
+        groups.find((group) => group.providerId === selectedProviderId)
+          ?.models ?? []
+      ).find((model) => model.id === selectedModelId)
+    : undefined;
+
+  const handleSelect = useCallback(
+    (providerId: string, model: Model) => {
+      setActiveId(providerId);
+      onModelChange?.(model.id, providerId);
+      setCookie("chat-model", model.id);
+      setOpen(false);
+      setTimeout(() => {
+        document
+          .querySelector<HTMLTextAreaElement>(
+            "[data-testid='multimodal-input']"
+          )
+          ?.focus();
+      }, 50);
+    },
+    [onModelChange, setActiveId]
   );
-
-  const capabilities: Record<string, ModelCapabilities> | undefined =
-    modelsData?.capabilities ?? modelsData;
-  const dynamicModels: ChatModel[] | undefined = modelsData?.models;
-  const activeModels = dynamicModels ?? chatModels;
-
-  const selectedModel =
-    activeModels.find((m: ChatModel) => m.id === selectedModelId) ??
-    activeModels.find((m: ChatModel) => m.id === DEFAULT_CHAT_MODEL) ??
-    activeModels[0];
-  const [provider] = selectedModel.id.split("/");
 
   return (
     <ModelSelector onOpenChange={setOpen} open={open}>
@@ -590,94 +617,48 @@ function PureModelSelectorCompact({
           data-testid="model-selector"
           variant="ghost"
         >
-          {provider ? <ModelSelectorLogo provider={provider} /> : null}
-          <ModelSelectorName>{selectedModel.name}</ModelSelectorName>
+          {selectedProviderId ? (
+            <ProviderMark providerId={selectedProviderId} />
+          ) : null}
+          <ModelSelectorName>
+            {selectedModel?.name ?? "Select a model"}
+          </ModelSelectorName>
         </Button>
       </ModelSelectorTrigger>
-      <ModelSelectorContent commandDefaultValue={selectedModel.id}>
+      <ModelSelectorContent
+        commandDefaultValue={
+          selectedProviderId && selectedModel
+            ? itemValue(selectedProviderId, selectedModel)
+            : undefined
+        }
+      >
         <ModelSelectorInput placeholder="Search models..." />
         <ModelSelectorList>
-          {(() => {
-            const curatedIds = new Set(chatModels.map((m) => m.id));
-            const allModels = dynamicModels
-              ? [
-                  ...chatModels,
-                  ...dynamicModels.filter((m) => !curatedIds.has(m.id)),
-                ]
-              : chatModels;
-
-            const grouped: Record<
-              string,
-              { model: ChatModel; curated: boolean }[]
-            > = {};
-            for (const model of allModels) {
-              const key = curatedIds.has(model.id)
-                ? "_available"
-                : model.provider;
-              if (!grouped[key]) {
-                grouped[key] = [];
-              }
-              grouped[key].push({ curated: curatedIds.has(model.id), model });
-            }
-
-            const sortedKeys = Object.keys(grouped).sort((a, b) => {
-              if (a === "_available") {
-                return -1;
-              }
-              if (b === "_available") {
-                return 1;
-              }
-              return a.localeCompare(b);
-            });
-
-            const providerNames: Record<string, string> = {
-              alibaba: "Alibaba",
-              anthropic: "Anthropic",
-              "arcee-ai": "Arcee AI",
-              bytedance: "ByteDance",
-              cohere: "Cohere",
-              deepseek: "DeepSeek",
-              google: "Google",
-              inception: "Inception",
-              kwaipilot: "Kwaipilot",
-              meituan: "Meituan",
-              meta: "Meta",
-              minimax: "MiniMax",
-              mistral: "Mistral",
-              moonshotai: "Moonshot",
-              morph: "Morph",
-              nvidia: "Nvidia",
-              openai: "OpenAI",
-              perplexity: "Perplexity",
-              "prime-intellect": "Prime Intellect",
-              xai: "xAI",
-              xiaomi: "Xiaomi",
-              zai: "Zai",
-            };
-
-            return sortedKeys.map((key) => (
+          {groups.length === 0 ? (
+            <ModelSelectorEmpty>
+              Connect a provider to see its models.
+            </ModelSelectorEmpty>
+          ) : (
+            groups.map(({ providerId, models }) => (
               <ModelSelectorGroup
-                heading={
-                  key === "_available"
-                    ? "Available"
-                    : (providerNames[key] ?? key)
-                }
-                key={key}
+                heading={registry[providerId].label}
+                key={providerId}
               >
-                {grouped[key].map(({ model, curated }) => (
+                {models.map((model) => (
                   <ModelSelectorOption
-                    capabilities={capabilities}
-                    curated={curated}
-                    key={model.id}
+                    key={`${providerId}:${model.id}`}
                     model={model}
-                    onModelChange={onModelChange}
-                    selectedModelId={selectedModel.id}
-                    setOpen={setOpen}
+                    onSelect={handleSelect}
+                    providerId={providerId}
+                    selected={
+                      providerId === selectedProviderId &&
+                      model.id === selectedModelId
+                    }
                   />
                 ))}
               </ModelSelectorGroup>
-            ));
-          })()}
+            ))
+          )}
         </ModelSelectorList>
       </ModelSelectorContent>
     </ModelSelector>
