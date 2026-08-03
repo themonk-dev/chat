@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { useProviderAuth } from "@/hooks/use-provider-auth";
 import { registry } from "@/lib/oauth/registry";
 import { CopyIcon } from "./icons";
+import { providerLogos } from "./provider-logos";
 
 const PRIVACY_LINE =
   "Your token stays in this tab. It is never sent to our servers, and it is gone when you close this tab.";
@@ -59,6 +60,7 @@ export function AuthDialog({
 }) {
   const { activeId, connect, pending, submitCode } = useProviderAuth();
   const { flow, label, pasteHint } = registry[activeId];
+  const Logo = providerLogos[activeId];
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
@@ -199,7 +201,10 @@ export function AuthDialog({
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Connect {label}</DialogTitle>
+          <DialogTitle className="flex flex-row items-center gap-2">
+            {Logo ? <Logo className="size-5 shrink-0" /> : null}
+            Connect {label}
+          </DialogTitle>
         </DialogHeader>
 
         {flow === "popup" ? (
