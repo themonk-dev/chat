@@ -28,6 +28,7 @@ export class OAuthChatTransport implements ChatTransport<ChatMessage> {
 
   async sendMessages({
     messages,
+    abortSignal,
   }: Parameters<ChatTransport<ChatMessage>["sendMessages"]>[0]): Promise<
     ReadableStream<UIMessageChunk>
   > {
@@ -42,7 +43,12 @@ export class OAuthChatTransport implements ChatTransport<ChatMessage> {
     // handed to `streamText`, which requires a plain `ModelMessage[]`.
     const modelMessages = await convertToModelMessages(messages);
 
+    // `abortSignal` is the signal `useChat`'s `stop()` aborts. Threading it
+    // into `streamText` is what makes Stop actually cancel the in-flight
+    // request instead of leaving it to finish in the background while the
+    // UI ignores the rest of the stream.
     const result = streamText({
+      abortSignal,
       messages: modelMessages,
       model: modelFor(providerId, modelId, accessToken),
       tools: { getWeather },
