@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deleteChat,
   listChats,
@@ -56,5 +56,19 @@ describe("chat store", () => {
   it("survives a corrupted entry rather than throwing", () => {
     globalThis.localStorage.setItem("ai-oauth-chat:index", "{not json");
     expect(listChats()).toEqual([]);
+  });
+
+  it("swallows a write failure instead of throwing", () => {
+    const setItemSpy = vi
+      .spyOn(globalThis.localStorage, "setItem")
+      .mockImplementation(() => {
+        throw new Error("QuotaExceededError");
+      });
+
+    expect(() =>
+      writeChat({ id: "a", messages: [], title: "A", updatedAt: 1 })
+    ).not.toThrow();
+
+    setItemSpy.mockRestore();
   });
 });

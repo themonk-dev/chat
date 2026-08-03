@@ -46,6 +46,29 @@ function extractChatId(pathname: string): string | null {
   return match ? match[1] : null;
 }
 
+/**
+ * Loading a stored thread hands `useChat` a non-empty `messages` array and a
+ * `status` of `"ready"` immediately — the same shape as a real reply having
+ * just finished. Without this check, simply opening a thread would re-stamp
+ * `updatedAt` and drag it to the top of the sidebar. Only a genuine change in
+ * message count (a message sent, a reply completed) should persist.
+ */
+export function shouldPersistChat({
+  status,
+  messageCount,
+  lastPersistedCount,
+}: {
+  status: string;
+  messageCount: number;
+  lastPersistedCount: number;
+}): boolean {
+  return (
+    status === "ready" &&
+    messageCount > 0 &&
+    messageCount !== lastPersistedCount
+  );
+}
+
 export function ActiveChatProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { setDataStream, setWaitingStatus } = useDataStream();
@@ -177,8 +200,22 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
     }
   }, [sendMessage, chatId]);
 
+  const lastPersistedCountRef = useRef(initialMessages.length);
+
+  // Re-baseline whenever the active thread changes, so a freshly loaded
+  // chat's message count isn't mistaken for new activity by the effect below.
   useEffect(() => {
-    if (status !== "ready" || messages.length === 0) {
+    lastPersistedCountRef.current = readChat(chatId)?.messages.length ?? 0;
+  }, [chatId]);
+
+  useEffect(() => {
+    if (
+      !shouldPersistChat({
+        lastPersistedCount: lastPersistedCountRef.current,
+        messageCount: messages.length,
+        status,
+      })
+    ) {
       return;
     }
 
@@ -191,6 +228,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
         .slice(0, 60) || "New chat";
 
     writeChat({ id: chatId, messages, title, updatedAt: Date.now() });
+    lastPersistedCountRef.current = messages.length;
   }, [chatId, messages, status]);
 
   const value = useMemo<ActiveChatContextValue>(

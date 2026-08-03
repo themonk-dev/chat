@@ -168,6 +168,7 @@ function PureMultimodalInput({
           break;
         case "clear":
           setMessages(() => []);
+          deleteChat(chatId);
           break;
         case "rename":
           toast("Rename is available from the sidebar chat menu.");
