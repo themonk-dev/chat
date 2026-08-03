@@ -551,9 +551,14 @@ function ModelSelectorOption({
   return (
     <ModelSelectorItem
       className={cn(
-        "flex w-full items-center gap-2 transition-colors",
+        // Every row carries the border so only its colour changes when the
+        // choice moves. Drawing it on the chosen row alone would add a pixel to
+        // each side and nudge the whole list.
+        "flex w-full items-center gap-2 border border-transparent transition-colors",
+        // `data-[selected]` is cmdk's keyboard cursor, which is not the same
+        // thing as the chosen model — hence the second, separate signal.
         "data-[selected=true]:bg-muted data-[selected=true]:text-foreground",
-        selected && "border-b border-dashed border-foreground/50"
+        selected && "border-dashed border-foreground/50"
       )}
       onSelect={handleSelect}
       value={itemValue(providerId, model)}
