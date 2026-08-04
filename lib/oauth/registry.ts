@@ -71,9 +71,17 @@ export const SEVERING_AUTH_PAGES = new Set(["claude"]);
  * provider answers `redirect_uri_mismatch` — or, for Anthropic, "Redirect URI
  * … is not supported by client" — so the flow falls back to paste.
  *
- * Neither declares a device endpoint, which is the only grant that needs no
- * redirect URI at all and the reason ChatGPT, Copilot, Grok and Qwen work on
- * every origin. See the note on `Flow`.
+ * The device grant is the only one needing no redirect URI, and it is what puts
+ * ChatGPT, Copilot, Grok and Qwen on every origin. Both auth servers have that
+ * endpoint; both refuse these clients, probed live:
+ *
+ *   POST platform.claude.com/v1/oauth/device_authorization -> unauthorized_client
+ *     (an unknown client id answers invalid_client, so the grant is disabled
+ *     for this one rather than the request being malformed)
+ *   POST oauth2.googleapis.com/device/code -> invalid_client, "Invalid client type."
+ *
+ * So paste is not a stopgap here. Changing it needs a client we register
+ * ourselves, not a different flow.
  */
 const LOOPBACK_POPUP_PROVIDERS = new Set(["claude", "gemini"]);
 
