@@ -1,7 +1,12 @@
 "use client";
 
 import type { TokenSet } from "@ai-oauth-sdk/browser";
-import { manualReceiver, popupReceiver } from "@ai-oauth-sdk/browser";
+import {
+  isOAuthError,
+  manualReceiver,
+  OAuthError,
+  popupReceiver,
+} from "@ai-oauth-sdk/browser";
 import {
   createContext,
   type ReactNode,
@@ -59,6 +64,42 @@ type PasteAttempt = {
 
 const ACTIVE_KEY = "ai-oauth-chat:provider";
 const ProviderAuthContext = createContext<ProviderAuthValue | null>(null);
+
+/**
+ * What a rejection from a cancelled attempt means, decided once.
+ *
+ * A cancelled attempt does not reject with one predictable thing, and no
+ * caller can tell the shapes apart by inspection. `setActiveId` aborts the
+ * signal every flow was handed, and whatever happens to be awaiting it at
+ * that instant is what surfaces: the SDK's own `sleep` between device polls
+ * raises `OAuthError("aborted")`, while a poll request already on the wire is
+ * killed by `fetch` itself and raises a bare `DOMException` named
+ * `AbortError` that never passes through SDK code at all. Which one a reader
+ * gets is a matter of milliseconds. Call sites were left pattern-matching on
+ * the error, so they recognised the first and reported the second as a
+ * failure — a `console.error` and a dev-overlay issue for the ordinary act of
+ * closing a dialog.
+ *
+ * `controller` is what actually knows, and it is not a shape: this hook
+ * created it, `setActiveId` is the only thing that aborts it, so
+ * `signal.aborted` is a direct record of "we cancelled this", true regardless
+ * of what the abort happened to interrupt. Everything raised under it becomes
+ * the SDK's own `aborted` error, so cancellation crosses this boundary as one
+ * thing and callers have nothing left to guess at.
+ *
+ * Deliberately not a blanket catch: with `aborted` false — a device request
+ * that genuinely fails, a dropped connection, a rejected code — the original
+ * error is returned untouched and still reaches the dialog's error UI.
+ */
+function asCancellation(controller: AbortController, error: unknown): unknown {
+  if (!controller.signal.aborted) {
+    return error;
+  }
+
+  return isOAuthError(error) && error.code === "aborted"
+    ? error
+    : new OAuthError("aborted", "The sign-in was cancelled.");
+}
 
 /**
  * Owns which provider is selected and whether it is connected.
@@ -137,19 +178,54 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /**
+   * Runs one sign-in attempt under its own `AbortController`, and owns
+   * everything that is true of an attempt regardless of which flow it is.
+   *
+   * The three flows differ in what they call and how long they take, but not
+   * in any of this: register the controller where `setActiveId` can reach it,
+   * clear `pending` and that registration once the attempt settles however it
+   * settles, and put every rejection through `asCancellation` on the way out.
+   * Holding that in one function is what makes "was this abort ours?" a fact
+   * the hook establishes once, rather than a question each flow — and each
+   * caller downstream of it — answers again by inspecting an error.
+   *
    * `pending` must never outlive the attempt that set it: a device code that
    * gets denied or times out, or a popup the reader closes, has to leave the
    * dialog able to react rather than stuck showing a code that can no longer
-   * be redeemed. Popup and device both resolve or fail within this call, so
-   * `finally` clears `pending` unconditionally once either is done. Paste
-   * clears it the same way, just from `completion`'s `finally` instead of
-   * this function's own — see below.
+   * be redeemed. `finally` is what guarantees that, for all three.
    *
+   * The registration is cleared only while it is still this attempt's. A
+   * `connect()` that started later has already replaced it, and must not have
+   * its own controller dropped — leaving it unabortable — by a predecessor
+   * finishing late.
+   */
+  const runAttempt = useCallback(
+    <T,>(work: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+      const controller = new AbortController();
+      connectAbortRef.current = controller;
+
+      return work(controller.signal)
+        .catch((error: unknown) => {
+          throw asCancellation(controller, error);
+        })
+        .finally(() => {
+          setPending(undefined);
+          if (connectAbortRef.current === controller) {
+            connectAbortRef.current = null;
+          }
+        });
+    },
+    []
+  );
+
+  /**
    * All three flows keep working after the reader backs out of the dialog —
    * a popup window left open, a device code approved later in another tab,
    * a paste flow still waiting on a `submitCode` that never comes — so all
-   * three are given `controller.signal` to stop that work the moment
-   * `setActiveId` decides it is no longer wanted. Once a result does arrive,
+   * three run through `runAttempt`, which hands them a signal that stops that
+   * work the moment `setActiveId` decides it is no longer wanted, and turns
+   * whatever the abort interrupts into one cancellation (see
+   * `asCancellation`). Once a result does arrive,
    * it is tagged with `result.provider` — the SDK's own record of which
    * provider actually issued it, not this call's closed-over `activeId` —
    * so a late result cannot silently masquerade as belonging to whatever is
@@ -170,54 +246,43 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
    */
   const connect = useCallback(async () => {
     const { flow } = registry[activeId];
+    const client = clientFor(activeId);
 
     if (flow === "popup") {
-      const client = clientFor(activeId);
-      const controller = new AbortController();
-      connectAbortRef.current = controller;
-
-      try {
-        const result = await client.login({
-          receiver: popupReceiver({
-            redirectUri: `${window.location.origin}/callback`,
-          }),
-          signal: controller.signal,
-        });
-        setTaggedTokens({ providerId: result.provider, tokens: result });
-      } finally {
-        setPending(undefined);
-        if (connectAbortRef.current === controller) {
-          connectAbortRef.current = null;
-        }
-      }
+      await runAttempt((signal) =>
+        client
+          .login({
+            receiver: popupReceiver({
+              redirectUri: `${window.location.origin}/callback`,
+            }),
+            signal,
+          })
+          .then((result) => {
+            setTaggedTokens({ providerId: result.provider, tokens: result });
+          })
+      );
 
       return;
     }
 
     if (flow === "device") {
-      const client = clientFor(activeId);
-      const controller = new AbortController();
-      connectAbortRef.current = controller;
-
-      try {
-        const result = await client.deviceLogin({
-          onCode: (device) => {
-            setPending({
-              kind: "device",
-              userCode: device.userCode,
-              verificationUri:
-                device.verificationUriComplete ?? device.verificationUri,
-            });
-          },
-          signal: controller.signal,
-        });
-        setTaggedTokens({ providerId: result.provider, tokens: result });
-      } finally {
-        setPending(undefined);
-        if (connectAbortRef.current === controller) {
-          connectAbortRef.current = null;
-        }
-      }
+      await runAttempt((signal) =>
+        client
+          .deviceLogin({
+            onCode: (device) => {
+              setPending({
+                kind: "device",
+                userCode: device.userCode,
+                verificationUri:
+                  device.verificationUriComplete ?? device.verificationUri,
+              });
+            },
+            signal,
+          })
+          .then((result) => {
+            setTaggedTokens({ providerId: result.provider, tokens: result });
+          })
+      );
 
       return;
     }
@@ -241,10 +306,6 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
      * writing the result — runs in `completion`, in the background, for
      * `submitCode` to await later.
      */
-    const client = clientFor(activeId);
-    const controller = new AbortController();
-    connectAbortRef.current = controller;
-
     let resolveInput!: (value: string) => void;
     const inputPromise = new Promise<string>((resolve) => {
       resolveInput = resolve;
@@ -255,29 +316,25 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
       signalPromptShown = resolve;
     });
 
-    const completion = client
-      .login({
-        openUrl: (url) => {
-          window.open(url, "_blank", "noopener,noreferrer");
-        },
-        receiver: manualReceiver({
-          prompt: (url) => {
-            setPending({ kind: "paste", url });
-            signalPromptShown();
-            return inputPromise;
+    const completion = runAttempt((signal) =>
+      client
+        .login({
+          openUrl: (url) => {
+            window.open(url, "_blank", "noopener,noreferrer");
           },
-        }),
-        signal: controller.signal,
-      })
-      .then((result) => {
-        setTaggedTokens({ providerId: result.provider, tokens: result });
-      })
-      .finally(() => {
-        setPending(undefined);
-        if (connectAbortRef.current === controller) {
-          connectAbortRef.current = null;
-        }
-      });
+          receiver: manualReceiver({
+            prompt: (url) => {
+              setPending({ kind: "paste", url });
+              signalPromptShown();
+              return inputPromise;
+            },
+          }),
+          signal,
+        })
+        .then((result) => {
+          setTaggedTokens({ providerId: result.provider, tokens: result });
+        })
+    );
     // Nothing awaits `completion` unless `submitCode` is called (the reader
     // may cancel before ever pasting anything) — one handler is enough to
     // keep a rejection from being reported as unhandled; `submitCode`, if
@@ -286,7 +343,7 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
 
     pasteAttemptRef.current = { completion, resolveInput };
     await Promise.race([promptShown, completion]);
-  }, [activeId]);
+  }, [activeId, runAttempt]);
 
   /**
    * Hands the reader's pasted value to whichever `manualReceiver` `prompt`
