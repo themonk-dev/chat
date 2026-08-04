@@ -28,11 +28,7 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
 
   const handleSuggestionClick = useCallback(
     (suggestion: string) => {
-      window.history.pushState(
-        {},
-        "",
-        `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/chat/${chatId}`
-      );
+      window.history.pushState({}, "", `/chat/${chatId}`);
       sendMessage({
         parts: [{ text: suggestion, type: "text" }],
         role: "user",

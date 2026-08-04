@@ -38,7 +38,7 @@ function blockNotice(upstream: Response, target: URL): Response | undefined {
 
 function secretFor(target: URL): string | undefined {
   if (target.host.endsWith("googleapis.com")) {
-    return process.env.GEMINI_CLIENT_SECRET ?? publicClientSecrets.gemini;
+    return publicClientSecrets.gemini;
   }
 }
 

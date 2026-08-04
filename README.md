@@ -53,12 +53,13 @@ pnpm build      # production build
 
 ## Configuration
 
-Both variables are optional; see [`.env.example`](.env.example).
+There is none. No environment variables, no database, no session store and no
+server-side model key — deploying is `git push`.
 
-| Variable | Purpose |
-| --- | --- |
-| `GEMINI_CLIENT_SECRET` | Pins a different published client secret for Google's token endpoint. The SDK ships the gemini-cli one, so the app works unset. |
-| `IS_DEMO` | Set to `1` to build the `/demo` variant, served under a basePath with assets at `/demo-assets`. |
+Google's token endpoint wants a `client_secret` alongside the PKCE code, and
+the proxy appends the published gemini-cli one that the SDK ships
+(`lib/oauth/proxy.ts`). It is a public desktop-client secret, not a confidential
+one; PKCE is what protects the flow.
 
 ## Credits
 

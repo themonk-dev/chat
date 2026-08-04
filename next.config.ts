@@ -1,29 +1,10 @@
 import { withBotId } from "botid/next/config";
 import type { NextConfig } from "next";
 
-const basePath = process.env.IS_DEMO === "1" ? "/demo" : "";
-
 const nextConfig: NextConfig = {
-  ...(basePath
-    ? {
-        assetPrefix: "/demo-assets",
-        basePath,
-        redirects: async () => [
-          {
-            basePath: false,
-            destination: basePath,
-            permanent: false,
-            source: "/",
-          },
-        ],
-      }
-    : {}),
   // cacheComponents stays off: it rejects the explicit `runtime = "nodejs"`
   // the OAuth proxy route pins itself to, and that guarantee wins.
   devIndicators: false,
-  env: {
-    NEXT_PUBLIC_BASE_PATH: basePath,
-  },
   experimental: {
     appNewScrollHandler: true,
     inlineCss: true,

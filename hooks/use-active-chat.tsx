@@ -204,11 +204,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
     }
 
     hasAppendedQueryRef.current = true;
-    window.history.replaceState(
-      {},
-      "",
-      `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/chat/${chatId}`
-    );
+    window.history.replaceState({}, "", `/chat/${chatId}`);
     sendMessage({ parts: [{ text: query, type: "text" }], role: "user" });
   }, [sendMessage, chatId]);
 

@@ -142,11 +142,7 @@ function PureMultimodalInput({
     setStoredDraft("");
     setInput("");
 
-    window.history.pushState(
-      {},
-      "",
-      `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/chat/${chatId}`
-    );
+    window.history.pushState({}, "", `/chat/${chatId}`);
 
     sendMessage({ parts, role: "user" });
 
