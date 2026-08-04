@@ -12,6 +12,17 @@ const SHORT_DESCRIPTION =
   "One place to chat with seven AI providers using your own accounts. No signup, no API keys, nothing stored on our servers.";
 const SITE_URL = "https://chat.themonk.dev";
 
+/**
+ * Neither block below sets `images`. app/opengraph-image.tsx uses Next's
+ * file convention, which auto-populates both `openGraph.images` and
+ * `twitter.images` from that one route — verified by inspecting the
+ * rendered <head>, which carries a matching og:image and twitter:image
+ * (same URL, plus width/height/alt/type) with no images field set here.
+ * Setting `images` explicitly here would either duplicate that route's
+ * `alt`/`size` exports (another string pair to keep in sync, on top of
+ * TITLE/SHORT_DESCRIPTION below) or drop those fields from the tags
+ * entirely — Next only fills them in for images it discovers itself.
+ */
 export const metadata: Metadata = {
   description: DESCRIPTION,
   metadataBase: new URL(SITE_URL),
