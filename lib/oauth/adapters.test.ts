@@ -1,7 +1,10 @@
 import type { TokenSet } from "@ai-oauth-sdk/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type CodexOptions = { headers?: Record<string, string> };
+type CodexOptions = {
+  fetch?: typeof fetch;
+  headers?: Record<string, string>;
+};
 
 const createOpenAIMock = vi.fn((_options: CodexOptions) => ({
   responses: vi.fn(() => "codex-model"),
@@ -85,6 +88,130 @@ describe("modelFor", () => {
         "OpenAI-Beta": "responses=experimental",
         originator: "codex_cli_rs",
       });
+    });
+
+    /**
+     * Drives the `fetch` wrapper `modelFor` hands `createOpenAI` — the one
+     * place the outgoing Codex request is actually assembled — and returns
+     * what went out. The global is stubbed before `modelFor` runs because
+     * `withSseTailFlush()` captures the global as its inner `fetch` at
+     * construction time, not per call.
+     */
+    async function codexRequest(
+      sent: Record<string, unknown>,
+      path = "/api/upstream/openai/responses"
+    ): Promise<{
+      body: Record<string, unknown>;
+      url: string;
+    }> {
+      const inner = vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolve(
+              new Response("{}", {
+                headers: { "content-type": "application/json" },
+              })
+            );
+          })
+      );
+
+      vi.stubGlobal("fetch", inner);
+
+      try {
+        getTokensMock.mockResolvedValue({
+          accessToken: "codex-tok",
+          accountId: "acct-123",
+          provider: "openai",
+          raw: {},
+          tokenType: "bearer",
+        });
+
+        await modelFor("openai", "gpt-5.5", "codex-tok");
+
+        const codexFetch = createOpenAIMock.mock.calls.at(0)?.[0].fetch;
+
+        expect(codexFetch).toBeTypeOf("function");
+
+        await codexFetch?.(path, {
+          body: JSON.stringify(sent),
+          headers: { "content-type": "application/json" },
+          method: "POST",
+        });
+
+        const [url, init] = inner.mock.calls.at(0) as unknown as [
+          string,
+          RequestInit,
+        ];
+
+        return {
+          body: JSON.parse(String(init.body)) as Record<string, unknown>,
+          url,
+        };
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+
+    /**
+     * The regression: a `session_id` was added to the Responses body, and
+     * Codex answers `{"detail":"Unsupported parameter: session_id"}` to every
+     * request carrying one — so no message could be sent at all.
+     *
+     * It was never in the working predecessor
+     * (`apps/demo/app/components/demo/transport.ts`, which sends only
+     * `model`/`stream`/`input` and lets the descriptor supply the rest), and
+     * it is in no descriptor either: `@ai-oauth-sdk/core` contains no
+     * `session_id` anywhere. Codex CLI does send one, but as an HTTP *header*
+     * for cache routing — never as a body parameter. If it is ever wanted it
+     * belongs in the SDK descriptor's `apiHeaders`, alongside `originator`
+     * and `OpenAI-Beta`, not hand-added to the body here.
+     */
+    it("sends no session_id in the Codex Responses body", async () => {
+      const { body } = await codexRequest({
+        input: [{ content: "hi", role: "user" }],
+        model: "gpt-5.5",
+        stream: true,
+      });
+
+      expect(body).not.toHaveProperty("session_id");
+    });
+
+    /**
+     * The other half of the same assertion: dropping `session_id` must not
+     * take the four things Codex genuinely does require with it. A body
+     * missing these gets a 200 with an empty stream rather than an error,
+     * which is far worse to debug than the 400 above.
+     */
+    it("still normalizes the Codex Responses body the way the backend needs", async () => {
+      const { body, url } = await codexRequest({
+        input: [{ content: "hi", id: "msg_server_side", role: "user" }],
+        max_output_tokens: 100,
+        model: "gpt-5.5",
+        stream: true,
+      });
+
+      expect(body.store).toBe(false);
+      expect(body.include).toContain("reasoning.encrypted_content");
+      expect(body.reasoning).toMatchObject({
+        effort: "medium",
+        summary: "auto",
+      });
+      // Stateless backend: an input item may carry no server-side id.
+      expect(body.input).toEqual([{ content: "hi", role: "user" }]);
+      expect(body).not.toHaveProperty("max_output_tokens");
+      // The model list the account can see is gated on this.
+      expect(url).toContain("client_version=");
+    });
+
+    it("leaves a non-Responses request body alone", async () => {
+      // The descriptor's own transform is path-guarded; reading it off the
+      // descriptor rather than re-deriving it keeps that guard.
+      const { body } = await codexRequest(
+        { model: "gpt-5.5" },
+        "/api/upstream/openai/models"
+      );
+
+      expect(body).toEqual({ model: "gpt-5.5" });
     });
 
     it("does not attach a differently-tokened record's account id", async () => {

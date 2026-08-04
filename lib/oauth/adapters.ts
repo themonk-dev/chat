@@ -1,4 +1,4 @@
-import { normalizeCodexResponsesBody, type TokenSet } from "@ai-oauth-sdk/core";
+import type { TokenSet } from "@ai-oauth-sdk/core";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
@@ -186,12 +186,28 @@ async function copilotModel(
  * Makes the stock Responses adapter's requests look like Codex CLI's.
  *
  * `@ai-sdk/openai` builds a plain Responses API body; Codex's backend runs
- * stateless and answers one with a silent empty stream rather than an error,
- * so `normalizeCodexResponsesBody` (the SDK's own fix for this, ordinarily
- * applied by `createAuthenticatedFetch`) is applied by hand here instead. A
- * query parameter is added the same way, read off the descriptor's
- * `apiQuery` rather than repeating the `client_version` value it already
- * carries — it is what gates which models the account can see.
+ * stateless and answers one with a silent empty stream rather than an error.
+ * The descriptor's own `transformRequestBody` is what knows the four things
+ * that implies (`store: false`, a configured `reasoning`, an `include` asking
+ * for `reasoning.encrypted_content`, and input items stripped of server-side
+ * ids) — ordinarily `createAuthenticatedFetch` applies it, and this is that
+ * call by hand for the one path that goes through a stock AI SDK factory
+ * instead. Reading the hook off the descriptor rather than reaching past it
+ * to `normalizeCodexResponsesBody` also inherits its `/responses` path
+ * guard, so a `/models` request is not rewritten as if it were a completion.
+ *
+ * `apiQuery` is read the same way rather than repeating the `client_version`
+ * value it already carries — it is what gates which models the account sees.
+ *
+ * Nothing is added on top of what the descriptor produces, and that is the
+ * point. A `session_id` was added here once, on the assumption that Codex
+ * required one; it does not, and the backend rejects the whole request with
+ * `{"detail":"Unsupported parameter: session_id"}`. Codex CLI does send a
+ * `session_id`, but as an HTTP header for cache routing, never as a body
+ * parameter — and the SDK descriptor, which owns `originator` and
+ * `OpenAI-Beta`, sends none. Anything this request is missing is missing
+ * from the descriptor, and belongs there where the CLI, Node and browser
+ * runtimes all get it at once.
  */
 function codexFetch(
   tokens: TokenSet,
@@ -199,8 +215,9 @@ function codexFetch(
 ): typeof fetch {
   return (url, init) => {
     const target = withQuery(url, proxiedProviders.openai.apiQuery?.(tokens));
+    const transform = proxiedProviders.openai.transformRequestBody;
 
-    if (typeof init?.body !== "string") {
+    if (typeof init?.body !== "string" || !transform) {
       return inner(target, init);
     }
 
@@ -214,10 +231,13 @@ function codexFetch(
 
     return inner(target, {
       ...init,
-      body: JSON.stringify({
-        ...normalizeCodexResponsesBody(body),
-        session_id: crypto.randomUUID(),
-      }),
+      body: JSON.stringify(
+        transform(
+          typeof target === "string" ? target : String(url),
+          body,
+          tokens
+        )
+      ),
     });
   };
 }

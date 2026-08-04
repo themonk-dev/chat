@@ -44,6 +44,50 @@ describe("modelsFor / defaultModelFor", () => {
   it("returns an empty string default for an unknown provider", () => {
     expect(defaultModelFor("not-a-provider")).toBe("");
   });
+
+  /**
+   * Every provider's default, pinned.
+   *
+   * `defaultModelFor` returns the *first* entry of the static list, and
+   * `nextSelection` in `hooks/use-active-chat.tsx` is what turns that into
+   * the model a reader is actually billed for the moment a provider
+   * connects. That makes the order of `MODELS` load-bearing in a way
+   * nothing about a list literal suggests, and it has already gone wrong
+   * once: Gemini was listed Pro-first, and on Google's free Code Assist
+   * tier 2.5 Pro's quota is a small fraction of Flash's — the same account
+   * that worked on the predecessor playground (which lists
+   * `gemini-2.5-flash` first) answered a one-token request here with
+   * "You have exhausted your capacity on this model".
+   *
+   * So this asserts the ids, not ordering in the abstract: a reorder for
+   * cosmetic reasons has to come past a test that names the model it would
+   * newly default every reader to.
+   */
+  it("pins the default model each provider starts on", () => {
+    const defaults = Object.fromEntries(
+      [
+        "claude",
+        "gemini",
+        "github-copilot",
+        "openai",
+        "openrouter",
+        "qwen",
+        "xai",
+      ].map((id) => [id, defaultModelFor(id)])
+    );
+
+    expect(defaults).toEqual({
+      claude: "claude-sonnet-4-5",
+      // Flash, not Pro — see above.
+      gemini: "gemini-2.5-flash",
+      "github-copilot": "gpt-4o",
+      // The one model the predecessor playground listed for Codex.
+      openai: "gpt-5-codex",
+      openrouter: "anthropic/claude-sonnet-4.5",
+      qwen: "qwen3-coder-plus",
+      xai: "grok-4",
+    });
+  });
 });
 
 describe("fetchModelsFor", () => {
