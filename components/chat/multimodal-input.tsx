@@ -521,7 +521,17 @@ function ComposerAttribution() {
   return (
     <p className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 px-2 text-center text-[11px] text-muted-foreground/60">
       <span className="inline-flex items-center gap-1">
-        OAuth by
+        built by
+        <a
+          className="inline-flex items-center gap-0.5 underline decoration-muted-foreground/30 underline-offset-2 hover:text-foreground hover:decoration-foreground/50"
+          href="https://themonk.dev"
+          rel="noopener noreferrer"
+          target="_blank"
+        >
+          themonk.dev
+          <ExternalLinkIcon className="size-3" />
+        </a>
+        using
         <a
           className="inline-flex items-center gap-0.5 underline decoration-muted-foreground/30 underline-offset-2 hover:text-foreground hover:decoration-foreground/50"
           href="https://ai-oauth.themonk.dev"
