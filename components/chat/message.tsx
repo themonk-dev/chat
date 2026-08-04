@@ -1,7 +1,7 @@
 "use client";
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { useCallback } from "react";
-import type { ChatMessage } from "@/lib/types";
+import { attributionOf, type ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
 import { MessageContent, MessageResponse } from "../ai-elements/message";
 import { Shimmer } from "../ai-elements/shimmer";
@@ -9,6 +9,7 @@ import { Tool, ToolContent, ToolHeader, ToolInput } from "../ai-elements/tool";
 import { useDataStream } from "./data-stream-provider";
 import { SparklesIcon } from "./icons";
 import { MessageActions } from "./message-actions";
+import { MessageAttribution } from "./message-attribution";
 import { MessageError } from "./message-error";
 import { MessageReasoning } from "./message-reasoning";
 import { Weather } from "./weather";
@@ -236,6 +237,19 @@ const PurePreviewMessage = ({
     return null;
   });
 
+  /**
+   * Only assistant messages, and only ones that were stamped when they were
+   * produced — `attributionOf` answers `undefined` for everything written
+   * before this existed, and nothing here substitutes a guess for that.
+   *
+   * A pure failure report is skipped: its block already says "<model> didn't
+   * reply" and names the provider under it in this same small print, so a
+   * second line would repeat both. That is the same reasoning that gives a
+   * failure report no action row.
+   */
+  const attribution =
+    isAssistant && !isFailureReport ? attributionOf(message) : undefined;
+
   const actions = isFailureReport ? null : (
     <MessageActions
       isLoading={isLoading}
@@ -245,11 +259,18 @@ const PurePreviewMessage = ({
     />
   );
 
+  /*
+   * Under the reply and above the hover-only action row: the footnote belongs
+   * to the message, so it sits at the end of what the message says, while the
+   * actions stay where a reader already reaches for them. Both occupy their
+   * space whether or not they are visible, so nothing shifts on hover.
+   */
   const content = isThinking ? (
     <WaitingText />
   ) : (
     <>
       {parts}
+      {attribution ? <MessageAttribution {...attribution} /> : null}
       {actions}
     </>
   );

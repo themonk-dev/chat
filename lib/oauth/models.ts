@@ -107,6 +107,21 @@ export function defaultModelFor(providerId: string): string {
   return MODELS[providerId]?.[0]?.id ?? "";
 }
 
+/**
+ * What to call a model on screen, given the provider it was used through.
+ *
+ * Falls back to the raw slug, which is the honest answer for a model picked
+ * from a live listing this build has never heard of: a slug names the model,
+ * and inventing a prettier name would not. Shared by the failure report and by
+ * the attribution line under a reply so the two cannot describe the same model
+ * differently.
+ */
+export function modelNameFor(providerId: string, modelId: string): string {
+  return (
+    modelsFor(providerId).find((model) => model.id === modelId)?.name ?? modelId
+  );
+}
+
 type UpstreamModel = { id?: unknown; name?: unknown };
 
 /** "grok-code-fast-1" -> "Grok Code Fast 1", for listings that answer with only an id. */
