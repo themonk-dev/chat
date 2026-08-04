@@ -9,6 +9,7 @@ import { Tool, ToolContent, ToolHeader, ToolInput } from "../ai-elements/tool";
 import { useDataStream } from "./data-stream-provider";
 import { SparklesIcon } from "./icons";
 import { MessageActions } from "./message-actions";
+import { MessageError } from "./message-error";
 import { MessageReasoning } from "./message-reasoning";
 import { Weather } from "./weather";
 
@@ -76,7 +77,7 @@ const PurePreviewMessage = ({
   message,
   isLoading,
   setMessages: _setMessages,
-  regenerate: _regenerate,
+  regenerate,
   requiresScrollPadding: _requiresScrollPadding,
   onEdit,
 }: {
@@ -99,8 +100,17 @@ const PurePreviewMessage = ({
       (part.type === "reasoning" &&
         "text" in part &&
         part.text?.trim().length > 0) ||
+      part.type === "data-error" ||
       part.type.startsWith("tool-")
   );
+
+  /**
+   * A message that is nothing but a failure report gets no action row: its
+   * only action is the Retry inside the block, and a Copy button beside it
+   * offers to copy text that does not exist ("There's no text to copy!").
+   */
+  const isFailureReport =
+    isAssistant && message.parts?.every((part) => part.type === "data-error");
   const isThinking = isAssistant && isLoading && !hasAnyContent;
 
   const mergedReasoning = message.parts?.reduce(
@@ -147,6 +157,12 @@ const PurePreviewMessage = ({
         >
           <MessageResponse>{sanitizeText(part.text)}</MessageResponse>
         </MessageContent>
+      );
+    }
+
+    if (type === "data-error") {
+      return (
+        <MessageError data={part.data} key={key} regenerate={regenerate} />
       );
     }
 
@@ -220,7 +236,7 @@ const PurePreviewMessage = ({
     return null;
   });
 
-  const actions = (
+  const actions = isFailureReport ? null : (
     <MessageActions
       isLoading={isLoading}
       key={`action-${message.id}`}
