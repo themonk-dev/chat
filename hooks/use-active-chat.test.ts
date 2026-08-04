@@ -2,7 +2,7 @@ import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import { deleteChat, readChat, writeChat } from "@/lib/chats/store";
 import type { ChatMessage } from "@/lib/types";
-import { shouldPersistChat, usePersistChat } from "./use-active-chat";
+import { shouldPersistChat, usePersistChat } from "./use-persist-chat";
 
 const userMessage = (id: string, text: string) => ({
   id,

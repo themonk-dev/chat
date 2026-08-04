@@ -1,71 +1,67 @@
-<a href="https://chatbot.ai-sdk.dev/demo">
-  <img alt="Chatbot" src="app/(chat)/opengraph-image.png">
-  <h1 align="center">Chatbot</h1>
-</a>
+<h1 align="center">Chat</h1>
 
 <p align="center">
-    Chatbot (formerly AI Chatbot) is a free, open-source template built with Next.js and the AI SDK that helps you quickly build powerful chatbot applications.
+  Chat with seven AI providers using your own accounts. No signup, no API keys,
+  nothing stored on a server of ours.
 </p>
 
 <p align="center">
-  <a href="https://chatbot.ai-sdk.dev/docs"><strong>Read Docs</strong></a> ·
-  <a href="#features"><strong>Features</strong></a> ·
-  <a href="#model-providers"><strong>Model Providers</strong></a> ·
-  <a href="#deploy-your-own"><strong>Deploy Your Own</strong></a> ·
-  <a href="#running-locally"><strong>Running locally</strong></a>
+  <a href="#how-it-works"><strong>How it works</strong></a> ·
+  <a href="#providers"><strong>Providers</strong></a> ·
+  <a href="#running-locally"><strong>Running locally</strong></a> ·
+  <a href="#configuration"><strong>Configuration</strong></a>
 </p>
-<br/>
 
-## Features
+## How it works
 
-- [Next.js](https://nextjs.org) App Router
-  - Advanced routing for seamless navigation and performance
-  - React Server Components (RSCs) and Server Actions for server-side rendering and increased performance
-- [AI SDK](https://ai-sdk.dev/docs/introduction)
-  - Unified API for generating text, structured objects, and tool calls with LLMs
-  - Hooks for building dynamic chat and generative user interfaces
-  - Supports OpenAI, Anthropic, Google, xAI, and other model providers via AI Gateway
-- [shadcn/ui](https://ui.shadcn.com)
-  - Styling with [Tailwind CSS](https://tailwindcss.com)
-  - Component primitives from [Radix UI](https://radix-ui.com) for accessibility and flexibility
-- Data Persistence
-  - [Neon Serverless Postgres](https://vercel.com/marketplace/neon) for saving chat history and user data
-  - [Vercel Blob](https://vercel.com/storage/blob) for efficient file storage
-- [Auth.js](https://authjs.dev)
-  - Simple and secure authentication
+You sign in to a provider with OAuth. The token is written to `sessionStorage`
+in your own tab and never leaves it: every model call is made from the browser
+by the AI SDK, with your token on the request. Chat history lives in
+`localStorage`.
 
-## Model Providers
+There is no database, no session store and no server-side model key. The one
+server-side piece is a closed proxy at `/api/[kind]/[id]/[[...path]]`, which
+exists because provider APIs are not reachable directly from a page (CORS, and
+a token endpoint that wants a published client secret). It forwards the
+`Authorization` header without reading it, and can only reach the hosts the
+[ai-oauth-sdk](https://ai-oauth.themonk.dev) descriptors already ship.
 
-This template uses the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) to access multiple AI models through a unified interface. Models are configured in `lib/ai/models.ts` with per-model provider routing. Included models: Mistral, Moonshot, DeepSeek, OpenAI, and xAI.
+## Providers
 
-### AI Gateway Authentication
-
-**For Vercel deployments**: Authentication is handled automatically via OIDC tokens.
-
-**For non-Vercel deployments**: You need to provide an AI Gateway API key by setting the `AI_GATEWAY_API_KEY` environment variable in your `.env.local` file.
-
-With the [AI SDK](https://ai-sdk.dev/docs/introduction), you can also switch to direct LLM providers like [OpenAI](https://openai.com), [Anthropic](https://anthropic.com), [Cohere](https://cohere.com/), and [many more](https://ai-sdk.dev/providers/ai-sdk-providers) with just a few lines of code.
-
-## Deploy Your Own
-
-You can deploy your own version of Chatbot to Vercel with one click:
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/templates/next.js/chatbot)
+OpenRouter, ChatGPT (Codex), Claude, Gemini (Code Assist), Grok, GitHub Copilot
+and Qwen. Which sign-in flow each one uses — popup, device code, or paste — is
+dictated by the client each vendor published, not by a setting; see
+`lib/oauth/registry.ts`.
 
 ## Running locally
 
-You will need to use the environment variables [defined in `.env.example`](.env.example) to run Chatbot. It's recommended you use [Vercel Environment Variables](https://vercel.com/docs/projects/environment-variables) for this, but a `.env` file is all that is necessary.
-
-> Note: You should not commit your `.env` file or it will expose secrets that will allow others to control access to your various AI and authentication provider accounts.
-
-1. Install Vercel CLI: `npm i -g vercel`
-2. Link local instance with Vercel and GitHub accounts (creates `.vercel` directory): `vercel link`
-3. Download your environment variables: `vercel env pull`
-
 ```bash
 pnpm install
-pnpm db:migrate # Setup database or apply latest database changes
 pnpm dev
 ```
 
-Your app template should now be running on [localhost:3000](http://localhost:3000).
+The app runs on [localhost:3000](http://localhost:3000) with no configuration.
+Gemini gets a popup sign-in on loopback and falls back to paste elsewhere,
+because its Desktop-app client only accepts a loopback redirect.
+
+```bash
+pnpm test       # vitest
+pnpm typecheck  # tsc --noEmit
+pnpm check      # lint + format
+pnpm build      # production build
+```
+
+## Configuration
+
+Both variables are optional; see [`.env.example`](.env.example).
+
+| Variable | Purpose |
+| --- | --- |
+| `GEMINI_CLIENT_SECRET` | Pins a different published client secret for Google's token endpoint. The SDK ships the gemini-cli one, so the app works unset. |
+| `IS_DEMO` | Set to `1` to build the `/demo` variant, served under a basePath with assets at `/demo-assets`. |
+
+## Credits
+
+Built by [themonk.dev](https://themonk.dev) using
+[ai-oauth-sdk](https://ai-oauth.themonk.dev). The chat interface started from
+[Vercel's Next.js AI Chatbot template](https://vercel.com/templates/next.js/chatbot).

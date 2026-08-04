@@ -1,11 +1,8 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { defaultModelFor } from "@/lib/oauth/models";
-import {
-  nextSelection,
-  resolveRequest,
-  useConnectedProviders,
-} from "./use-active-chat";
+import { defaultModelFor } from "@/lib/oauth/model-catalog";
+import { nextSelection, resolveRequest } from "@/lib/oauth/selection";
+import { useConnectedProviders } from "./use-connected-providers";
 
 /**
  * `useConnectedProviders` depends on `useProviderAuth` (owned by another

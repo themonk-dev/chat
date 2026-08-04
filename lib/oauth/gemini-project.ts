@@ -1,14 +1,10 @@
 /**
- * Resolves a Gemini OAuth token to a Code Assist project id.
- *
- * A gemini-cli sign-in grants access to Google's Code Assist API, and every
- * call on that surface — including a chat turn — has to name a Cloud project.
- * `loadCodeAssist` returns one for an account already onboarded;
- * otherwise `onboardUser` provisions a managed (free-tier) project and the
- * result has to be polled, since provisioning is asynchronous on Google's
- * side.
+ * Every Code Assist call has to name a Cloud project. `loadCodeAssist` returns
+ * one for an onboarded account; otherwise `onboardUser` provisions a free-tier
+ * project, asynchronously, so the result has to be polled.
  */
 
+import { BoundedMap } from "@/lib/bounded-map";
 import { assertBrowser } from "./browser-only";
 
 const CODE_ASSIST_METADATA = {
@@ -22,18 +18,16 @@ const ONBOARD_POLL_INTERVAL_MS = 2000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Bounded like `copilotCredentials`: a refresh mints a new key, and only the
+ * newest is ever read again. */
+const PROJECT_CACHE_LIMIT = 4;
+
 /** One resolution per token; onboarding then runs at most once per session. */
-const projectCache = new Map<string, string>();
+const projectCache = new BoundedMap<string, string>(PROJECT_CACHE_LIMIT);
 
 /**
- * The project id, whichever way Code Assist chose to send it.
- *
- * The two endpoints disagree: `loadCodeAssist` returns
- * `cloudaicompanionProject` as a bare string for an account that is already
- * onboarded, while `onboardUser` returns `{ id }` for one it has just
- * provisioned. Reading only the string form would report a successful
- * onboarding as a failure — the project exists, only the wrong shape was
- * checked for.
+ * The two endpoints disagree: `loadCodeAssist` answers with a bare string,
+ * `onboardUser` with `{ id }`.
  */
 export function readProjectId(value: unknown): string | undefined {
   if (typeof value === "string" && value) {
@@ -134,19 +128,9 @@ async function onboard(
 }
 
 /**
- * Resolves and caches a Code Assist project id for the given access token.
- *
- * `onStatus` is called at each stage so a caller can surface progress —
- * onboarding a fresh account polls for up to twenty seconds, and silence for
- * that long reads as a hang.
- *
- * Browser-only, asserted for the same reason as `copilotCredentialFor`: keying
- * `projectCache` by the access token stops one reader reading another's entry,
- * but on a server the map itself would be a process-wide record of which Google
- * Cloud project belongs to which token, kept for the life of the lambda. The
- * root-relative `/api/upstream/…` URL below cannot resolve off-page, so this
- * already fails on the server — but it fails on the *fetch*, with a URL parse
- * error that says nothing about why, and only after the cache has been read.
+ * `onStatus` reports progress because onboarding a fresh account polls for up
+ * to twenty seconds, and silence that long reads as a hang. Browser-only for
+ * the same reason as `copilotCredentialFor`.
  */
 export async function resolveGeminiProject(
   accessToken: string,

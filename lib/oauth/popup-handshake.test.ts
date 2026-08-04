@@ -21,8 +21,10 @@ import { proxiedProviders } from "./providers";
  * behaviour the browser's swap leaves standing.
  */
 
-const { announceCallback, CALLBACK_CHANNEL, handshakePopupReceiver } =
-  await import("./popup-handshake");
+const { announceCallback, CALLBACK_CHANNEL } = await import(
+  "./callback-channel"
+);
+const { handshakePopupReceiver } = await import("./popup-handshake");
 
 const provider = proxiedProviders.claude as ProviderConfig;
 

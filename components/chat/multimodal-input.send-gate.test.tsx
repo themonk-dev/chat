@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { ConnectedProviders } from "@/hooks/use-active-chat";
+import type { ConnectedProviders } from "@/lib/oauth/connections";
 import { MultimodalInput } from "./multimodal-input";
 
 /**
@@ -39,16 +39,13 @@ let auth: Auth = {
  * supposed to be asking for, so a test that stubbed it would be asserting
  * against a second copy of the thing under test.
  */
-vi.mock("@/hooks/use-active-chat", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@/hooks/use-active-chat")>();
+vi.mock("@/hooks/use-active-chat", () => ({
+  getSelectionProviderId: () => owner,
+}));
 
-  return {
-    getSelectionProviderId: () => owner,
-    resolveRequest: actual.resolveRequest,
-    useConnectedProviders: () => connected,
-  };
-});
+vi.mock("@/hooks/use-connected-providers", () => ({
+  useConnectedProviders: () => connected,
+}));
 
 vi.mock("@/hooks/use-provider-auth", () => ({
   useProviderAuth: () => auth,
@@ -87,8 +84,11 @@ vi.mock("@/lib/chats/store", () => ({
 }));
 
 vi.mock("@/lib/oauth/models", () => ({
-  defaultModelFor: () => "",
   fetchModelsFor: () => Promise.resolve([]),
+}));
+
+vi.mock("@/lib/oauth/model-catalog", () => ({
+  defaultModelFor: () => "",
   modelsFor: () => [],
 }));
 

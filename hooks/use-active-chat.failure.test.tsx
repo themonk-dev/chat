@@ -1,14 +1,10 @@
 import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { failureMessage, isBlankReply } from "@/lib/chats/failure-message";
 import { readChat } from "@/lib/chats/store";
 import type { ChatMessage } from "@/lib/types";
-import {
-  ActiveChatProvider,
-  failureMessage,
-  isBlankReply,
-  shouldPersistChat,
-  useActiveChat,
-} from "./use-active-chat";
+import { ActiveChatProvider, useActiveChat } from "./use-active-chat";
+import { shouldPersistChat } from "./use-persist-chat";
 
 /**
  * A send that fails has to leave something behind.

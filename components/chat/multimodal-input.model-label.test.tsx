@@ -2,8 +2,8 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { ConnectedProviders } from "@/hooks/use-active-chat";
-import type { Model } from "@/lib/oauth/models";
+import type { ConnectedProviders } from "@/lib/oauth/connections";
+import type { Model } from "@/lib/oauth/model-catalog";
 import { MultimodalInput } from "./multimodal-input";
 
 /**
@@ -42,16 +42,13 @@ const liveClaudeModels: Model[] = [
   { id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
 ];
 
-vi.mock("@/hooks/use-active-chat", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@/hooks/use-active-chat")>();
+vi.mock("@/hooks/use-active-chat", () => ({
+  getSelectionProviderId: () => owner,
+}));
 
-  return {
-    getSelectionProviderId: () => owner,
-    resolveRequest: actual.resolveRequest,
-    useConnectedProviders: () => connected,
-  };
-});
+vi.mock("@/hooks/use-connected-providers", () => ({
+  useConnectedProviders: () => connected,
+}));
 
 vi.mock("@/hooks/use-provider-auth", () => ({
   useProviderAuth: () => ({
@@ -89,8 +86,11 @@ vi.mock("@/lib/chats/store", () => ({
 }));
 
 vi.mock("@/lib/oauth/models", () => ({
-  defaultModelFor: () => "claude-sonnet-4-5-20250929",
   fetchModelsFor: () => Promise.resolve(liveClaudeModels),
+}));
+
+vi.mock("@/lib/oauth/model-catalog", () => ({
+  defaultModelFor: () => "claude-sonnet-4-5-20250929",
   modelsFor: (id: string) => (id === "claude" ? staticClaudeModels : []),
 }));
 

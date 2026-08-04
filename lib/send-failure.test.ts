@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeSendFailure, labelledFailureText } from "./errors";
+import { describeSendFailure, labelledFailureText } from "./send-failure";
 
 /**
  * The provider's own sentence is the only part of a failure a reader can act

@@ -25,17 +25,9 @@ const THEME_OPTIONS = [
 const [, , FALLBACK_OPTION] = THEME_OPTIONS;
 
 /**
- * Cycles between light, dark and system via a dropdown rather than a
- * two-way toggle, since the provider is configured with
- * `defaultTheme="system"` — a plain flip would have no way back to
- * "follow the system".
- *
- * `theme` is only trusted once mounted: the server has no access to the
- * client's stored preference, so rendering it during the initial client
- * render (before hydration settles) would mismatch the server-rendered
- * markup and either warn or flash the wrong icon. Both server and the
- * pre-mount client render fall back to the same "system" option, and the
- * real value swaps in only after the effect runs.
+ * A dropdown rather than a two-way toggle, so "follow the system" stays
+ * reachable. `theme` is only trusted once mounted: the server cannot know the
+ * stored preference, and rendering it before hydration flashes the wrong icon.
  */
 export function ThemeToggle() {
   const { setTheme, theme } = useTheme();

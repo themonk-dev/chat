@@ -28,16 +28,13 @@ import { MultimodalInput } from "./multimodal-input";
  * matches how Next runs this in development, where the report came from.
  */
 
-vi.mock("@/hooks/use-active-chat", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@/hooks/use-active-chat")>();
+vi.mock("@/hooks/use-active-chat", () => ({
+  getSelectionProviderId: () => "openrouter",
+}));
 
-  return {
-    getSelectionProviderId: () => "openrouter",
-    resolveRequest: actual.resolveRequest,
-    useConnectedProviders: () => new Map([["openrouter", "openrouter-secret"]]),
-  };
-});
+vi.mock("@/hooks/use-connected-providers", () => ({
+  useConnectedProviders: () => new Map([["openrouter", "openrouter-secret"]]),
+}));
 
 vi.mock("@/hooks/use-provider-auth", () => ({
   useProviderAuth: () => ({
@@ -70,8 +67,11 @@ vi.mock("@/lib/chats/store", () => ({
 }));
 
 vi.mock("@/lib/oauth/models", () => ({
-  defaultModelFor: () => "",
   fetchModelsFor: () => Promise.resolve([]),
+}));
+
+vi.mock("@/lib/oauth/model-catalog", () => ({
+  defaultModelFor: () => "",
   modelsFor: () => [],
 }));
 

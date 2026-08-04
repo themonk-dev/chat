@@ -92,8 +92,6 @@ export function ChatShell() {
               messages={messages}
               onEditMessage={handleEditMessage}
               regenerate={regenerate}
-              selectedModelId={currentModelId}
-              setMessages={setMessages}
               status={status}
             />
 

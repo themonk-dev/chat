@@ -1,9 +1,9 @@
 import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { defaultModelFor } from "@/lib/oauth/models";
+import { disconnectProvider } from "@/lib/oauth/connections";
+import { defaultModelFor } from "@/lib/oauth/model-catalog";
 import {
   ActiveChatProvider,
-  disconnectProvider,
   getSelectionProviderId,
   useActiveChat,
 } from "./use-active-chat";

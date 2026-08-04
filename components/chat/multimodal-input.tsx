@@ -3,87 +3,35 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import type { UIMessage } from "ai";
 import equal from "fast-deep-equal";
-import { ArrowUpIcon, ExternalLinkIcon } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useTheme } from "next-themes";
 import {
   type ChangeEvent,
   type Dispatch,
   memo,
   type SetStateAction,
   useCallback,
-  useEffect,
   useRef,
-  useState,
 } from "react";
 import { toast } from "sonner";
-import { useLocalStorage, useWindowSize } from "usehooks-ts";
-import {
-  ModelSelector,
-  ModelSelectorContent,
-  ModelSelectorEmpty,
-  ModelSelectorGroup,
-  ModelSelectorInput,
-  ModelSelectorItem,
-  ModelSelectorList,
-  ModelSelectorName,
-  ModelSelectorTrigger,
-} from "@/components/ai-elements/model-selector";
-import {
-  type ConnectedProviders,
-  getSelectionProviderId,
-  resolveRequest,
-  useConnectedProviders,
-} from "@/hooks/use-active-chat";
+import { useWindowSize } from "usehooks-ts";
+import { getSelectionProviderId } from "@/hooks/use-active-chat";
+import { useAutoFocus, useComposerDraft } from "@/hooks/use-composer-draft";
+import { useConnectedProviders } from "@/hooks/use-connected-providers";
 import { useProviderAuth } from "@/hooks/use-provider-auth";
-import { deleteChat, listChats } from "@/lib/chats/store";
-import { fetchModelsFor, type Model, modelsFor } from "@/lib/oauth/models";
-import { PROVIDER_ORDER, registry } from "@/lib/oauth/registry";
+import { useSlashCommands } from "@/hooks/use-slash-commands";
+import { registry } from "@/lib/oauth/registry";
+import { resolveRequest } from "@/lib/oauth/selection";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import {
-  PromptInput,
-  PromptInputFooter,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputTools,
-} from "../ai-elements/prompt-input";
-import { Button } from "../ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { StopIcon } from "./icons";
-import { ProviderMark } from "./provider-mark";
-import {
-  type SlashCommand,
-  SlashCommandMenu,
-  slashCommands,
-} from "./slash-commands";
+import { PromptInput, PromptInputTextarea } from "../ai-elements/prompt-input";
+import { ComposerActions } from "./composer-actions";
+import { ComposerAttribution } from "./composer-attribution";
+import { ComposerEditBanner } from "./composer-edit-banner";
+import { SlashCommandMenu } from "./slash-commands";
 import { SuggestedActions } from "./suggested-actions";
 
-function setCookie(name: string, value: string) {
-  const maxAge = 60 * 60 * 24 * 365;
-  // biome-ignore lint/suspicious/noDocumentCookie: needed for client-side cookie setting
-  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAge}`;
-}
+const DESKTOP_WIDTH = 768;
 
-function PureMultimodalInput({
-  chatId,
-  clearChat,
-  input,
-  setInput,
-  status,
-  stop,
-  attachments,
-  setAttachments,
-  messages,
-  setMessages,
-  sendMessage,
-  className,
-  selectedModelId,
-  onModelChange,
-  editingMessage,
-  onCancelEdit,
-  isLoading,
-}: {
+type MultimodalInputProps = {
   chatId: string;
   clearChat: () => void;
   input: string;
@@ -103,31 +51,35 @@ function PureMultimodalInput({
   editingMessage?: ChatMessage | null;
   onCancelEdit?: () => void;
   isLoading?: boolean;
-}) {
-  const router = useRouter();
+};
+
+function PureMultimodalInput({
+  chatId,
+  clearChat,
+  input,
+  setInput,
+  status,
+  stop,
+  attachments,
+  setAttachments,
+  messages,
+  setMessages,
+  sendMessage,
+  className,
+  selectedModelId,
+  onModelChange,
+  editingMessage,
+  onCancelEdit,
+  isLoading,
+}: MultimodalInputProps) {
   const { activeId, tokens } = useProviderAuth();
   const connected = useConnectedProviders();
 
   /**
-   * Whether this send can actually go out — asked of `resolveRequest`, the
-   * same function the transport consults, rather than answered a second time
-   * here.
-   *
-   * The question is *not* "is the active provider connected". A request is
-   * addressed to the model's owner, and owner and active provider are
-   * deliberately allowed to diverge: `nextSelection` answers `"keep"`
-   * whenever the owner still holds a token, precisely so that connecting or
-   * merely looking at another provider does not disturb a live selection. So
-   * a reader can have a Claude model selected while `activeId` is `xai`,
-   * disconnect Grok, and watch `useProviderAuth`'s `isConnected` go false for
-   * a send that `resolveRequest` would still resolve perfectly — a button
-   * greyed out for good, under a tooltip naming a provider they already have
-   * connected.
-   *
-   * Calling the resolver is what keeps that from coming back. A second
-   * derivation here — "does `owner` appear in `connected`" — would be correct
-   * today and free to drift tomorrow; there is only one derivation, and both
-   * the gate and the send read it.
+   * Asked of `resolveRequest`, the same function the transport consults — not
+   * "is the active provider connected". Owner and active provider are allowed
+   * to diverge, so a second derivation here would grey the button out for a
+   * send that is perfectly valid.
    */
   const owner = getSelectionProviderId();
   const request = resolveRequest({
@@ -139,173 +91,41 @@ function PureMultimodalInput({
   });
   const canSend = Boolean(request.accessToken && request.modelId);
 
-  /**
-   * Named rather than generic whenever there is an owner to name: the state
-   * this most often describes is one connected provider short, not none at
-   * all, and "connect a provider" sends the reader to a popover that already
-   * says "2 connected". With nothing selected there is no owner yet and no
-   * particular provider to point at, so the generic wording is the honest one.
-   */
+  // Named whenever there is an owner: the usual state is one provider short,
+  // not none, and "connect a provider" reads oddly beside "2 connected".
   const sendHint = owner
     ? `Connect ${registry[owner]?.label ?? owner} to send a message`
     : "Connect a provider to send a message";
 
-  const { setTheme, resolvedTheme } = useTheme();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
-  const hasAutoFocused = useRef(false);
-  useEffect(() => {
-    if (!hasAutoFocused.current && width) {
-      const timer = setTimeout(() => {
-        textareaRef.current?.focus();
-        hasAutoFocused.current = true;
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, [width]);
 
-  const [localStorageInput, setLocalStorageInput] = useLocalStorage(
-    "input",
-    ""
-  );
+  useAutoFocus(textareaRef, width);
 
-  /**
-   * Restores a draft left behind by a previous visit — once, on mount, from
-   * `localStorage` alone.
-   *
-   * The template ran this on every change of the stored value and preferred
-   * `textareaRef.current.value` over both the stored draft and React state:
-   *
-   * ```ts
-   * const finalValue = domValue || localStorageInput || "";
-   * ```
-   *
-   * For a controlled textarea that inverts the direction the value is
-   * supposed to travel. The DOM node is a *copy* of `input`, so consulting it
-   * turns any moment where the two disagree into a decision in the copy's
-   * favour — and the two disagree constantly, because this effect and the one
-   * below form a loop: writing state schedules a `localStorage` write, and a
-   * `localStorage` write re-runs this. Instrumenting the pair in the browser
-   * shows it settling a mount in five passes, one of which writes a stale
-   * empty string over a real stored draft and another of which copies the DOM
-   * back into state to undo it. Anything that lands mid-loop — a send that
-   * empties the composer, another tab writing the key — is liable to be
-   * reverted by whichever copy the next pass happens to read.
-   *
-   * Running once, from storage only, leaves `input` the single writer of both
-   * the textarea and the stored draft. Restoring only into an empty composer
-   * keeps it from overwriting text the shell has already put there (the edit
-   * flow sets `input` before this mounts).
-   */
-  const hasRestoredDraft = useRef(false);
-  useEffect(() => {
-    if (hasRestoredDraft.current) {
-      return;
-    }
-    hasRestoredDraft.current = true;
-
-    if (localStorageInput && !input) {
-      setInput(localStorageInput);
-    }
-  }, [input, localStorageInput, setInput]);
-
-  useEffect(() => {
-    setLocalStorageInput(input);
-  }, [input, setLocalStorageInput]);
-
-  const [slashOpen, setSlashOpen] = useState(false);
-  const [slashQuery, setSlashQuery] = useState("");
-  const [slashIndex, setSlashIndex] = useState(0);
+  const setStoredDraft = useComposerDraft(input, setInput);
+  const {
+    close: closeSlash,
+    handleKeyDown: handleSlashKeyDown,
+    index: slashIndex,
+    open: slashOpen,
+    query: slashQuery,
+    select: selectSlash,
+    submitTyped: submitTypedSlash,
+    trackInput: trackSlashInput,
+  } = useSlashCommands({ chatId, clearChat, setInput });
 
   const handleInput = useCallback(
     (event: ChangeEvent<HTMLTextAreaElement>) => {
-      const val = event.target.value;
-      setInput(val);
-
-      if (val.startsWith("/") && !val.includes(" ")) {
-        setSlashOpen(true);
-        setSlashQuery(val.slice(1));
-        setSlashIndex(0);
-      } else {
-        setSlashOpen(false);
-      }
+      setInput(event.target.value);
+      trackSlashInput(event);
     },
-    [setInput]
-  );
-
-  const handleSlashSelect = useCallback(
-    (cmd: SlashCommand) => {
-      setSlashOpen(false);
-      setInput("");
-      switch (cmd.action) {
-        case "new":
-          router.push("/");
-          break;
-        case "clear":
-          clearChat();
-          break;
-        case "rename":
-          toast("Rename is available from the sidebar chat menu.");
-          break;
-        case "model": {
-          const modelBtn = document.querySelector<HTMLButtonElement>(
-            "[data-testid='model-selector']"
-          );
-          modelBtn?.click();
-          break;
-        }
-        case "theme":
-          setTheme(resolvedTheme === "dark" ? "light" : "dark");
-          break;
-        case "delete":
-          toast("Delete this chat?", {
-            action: {
-              label: "Delete",
-              onClick: () => {
-                deleteChat(chatId);
-                router.push("/");
-                toast.success("Chat deleted");
-              },
-            },
-          });
-          break;
-        case "purge":
-          toast("Delete all chats?", {
-            action: {
-              label: "Delete all",
-              onClick: () => {
-                for (const chat of listChats()) {
-                  deleteChat(chat.id);
-                }
-                router.push("/");
-                toast.success("All chats deleted");
-              },
-            },
-          });
-          break;
-        default:
-          break;
-      }
-    },
-    [chatId, clearChat, resolvedTheme, router, setInput, setTheme]
+    [setInput, trackSlashInput]
   );
 
   /**
-   * Empties the composer, then sends what it held.
-   *
-   * The order is the fix. These three clears used to sit *after* the
-   * `sendMessage(...)` call, so whether the composer emptied depended on that
-   * call returning normally — and the reader saw their text still in the box,
-   * under a live Send button, precisely when the send had gone wrong. Pressing
-   * Enter again then sent it a second time, which is how a failed message
-   * became two messages.
-   *
-   * Clearing first makes emptying the composer unconditional: nothing
-   * `sendMessage` does, synchronously or later, can skip it. Nothing is lost
-   * by clearing early either — the parts array is built from values captured
-   * above, and a send that fails now reports itself in the thread with a
-   * Retry, so the text the reader typed is still on screen and still
-   * re-sendable. That is what makes this safe rather than merely tidy.
+   * Empties the composer, then sends what it held. These clears used to sit
+   * after `sendMessage(...)`, so a failed send left the text in the box under a
+   * live Send button — and a second Enter sent it twice.
    */
   const submitForm = useCallback(() => {
     const parts = [
@@ -319,7 +139,7 @@ function PureMultimodalInput({
     ];
 
     setAttachments([]);
-    setLocalStorageInput("");
+    setStoredDraft("");
     setInput("");
 
     window.history.pushState(
@@ -330,7 +150,7 @@ function PureMultimodalInput({
 
     sendMessage({ parts, role: "user" });
 
-    if (width && width > 768) {
+    if (width && width > DESKTOP_WIDTH) {
       textareaRef.current?.focus();
     }
   }, [
@@ -339,113 +159,62 @@ function PureMultimodalInput({
     attachments,
     sendMessage,
     setAttachments,
-    setLocalStorageInput,
+    setStoredDraft,
     width,
     chatId,
   ]);
 
-  const handleCancelEditMouseDown = useCallback(
-    (e: React.MouseEvent<HTMLButtonElement>) => {
-      e.preventDefault();
-      onCancelEdit?.();
-    },
-    [onCancelEdit]
-  );
-
-  const handleSlashClose = useCallback(() => {
-    setSlashOpen(false);
-  }, []);
-
   const handlePromptSubmit = useCallback(() => {
-    if (input.startsWith("/")) {
-      const query = input.slice(1).trim();
-      const cmd = slashCommands.find((c) => c.name === query);
-      if (cmd) {
-        handleSlashSelect(cmd);
-      }
+    if (submitTypedSlash(input)) {
       return;
     }
+
     if (!input.trim() && attachments.length === 0) {
       return;
     }
+
     if (status === "ready" || status === "error") {
       submitForm();
-    } else {
-      toast.error("Please wait for the model to finish its response!");
+      return;
     }
-  }, [attachments.length, handleSlashSelect, input, status, submitForm]);
+
+    toast.error("Please wait for the model to finish its response!");
+  }, [attachments.length, input, status, submitForm, submitTypedSlash]);
 
   const handleTextareaKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (slashOpen) {
-        const filtered = slashCommands.filter((cmd) =>
-          cmd.name.startsWith(slashQuery.toLowerCase())
-        );
-        if (e.key === "ArrowDown") {
-          e.preventDefault();
-          setSlashIndex((i) => Math.min(i + 1, filtered.length - 1));
-          return;
-        }
-        if (e.key === "ArrowUp") {
-          e.preventDefault();
-          setSlashIndex((i) => Math.max(i - 1, 0));
-          return;
-        }
-        if (e.key === "Enter" || e.key === "Tab") {
-          e.preventDefault();
-          if (filtered[slashIndex]) {
-            handleSlashSelect(filtered[slashIndex]);
-          }
-          return;
-        }
-        if (e.key === "Escape") {
-          e.preventDefault();
-          setSlashOpen(false);
-          return;
-        }
+    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (handleSlashKeyDown(event)) {
+        return;
       }
-      if (e.key === "Escape" && editingMessage && onCancelEdit) {
-        e.preventDefault();
+
+      if (event.key === "Escape" && editingMessage && onCancelEdit) {
+        event.preventDefault();
         onCancelEdit();
       }
     },
-    [
-      editingMessage,
-      handleSlashSelect,
-      onCancelEdit,
-      slashIndex,
-      slashOpen,
-      slashQuery,
-    ]
+    [editingMessage, handleSlashKeyDown, onCancelEdit]
   );
+
+  const showSuggestions =
+    !(editingMessage || isLoading) &&
+    messages.length === 0 &&
+    attachments.length === 0;
 
   return (
     <div className={cn("relative flex w-full flex-col gap-4", className)}>
       {editingMessage && onCancelEdit ? (
-        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
-          <span>Editing message</span>
-          <button
-            className="rounded px-1.5 py-0.5 text-muted-foreground/50 transition-colors hover:bg-muted hover:text-foreground"
-            onMouseDown={handleCancelEditMouseDown}
-            type="button"
-          >
-            Cancel
-          </button>
-        </div>
+        <ComposerEditBanner onCancel={onCancelEdit} />
       ) : null}
 
-      {!editingMessage &&
-        !isLoading &&
-        messages.length === 0 &&
-        attachments.length === 0 && (
-          <SuggestedActions chatId={chatId} sendMessage={sendMessage} />
-        )}
+      {showSuggestions ? (
+        <SuggestedActions chatId={chatId} sendMessage={sendMessage} />
+      ) : null}
 
       <div className="relative">
         {slashOpen ? (
           <SlashCommandMenu
-            onClose={handleSlashClose}
-            onSelect={handleSlashSelect}
+            onClose={closeSlash}
+            onSelect={selectSlash}
             query={slashQuery}
             selectedIndex={slashIndex}
           />
@@ -467,95 +236,22 @@ function PureMultimodalInput({
           ref={textareaRef}
           value={input}
         />
-        <PromptInputFooter className="px-3 pb-3">
-          <PromptInputTools>
-            <ModelSelectorCompact
-              connected={connected}
-              onModelChange={onModelChange}
-              selectedModelId={selectedModelId}
-            />
-          </PromptInputTools>
 
-          {status === "submitted" ? (
-            <StopButton setMessages={setMessages} stop={stop} />
-          ) : (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex" data-testid="send-hint-trigger">
-                  <PromptInputSubmit
-                    className={cn(
-                      "h-7 w-7 rounded-xl transition-all duration-200",
-                      input.trim() && canSend
-                        ? "bg-foreground text-background hover:opacity-85 active:scale-95"
-                        : "bg-muted text-muted-foreground/25 cursor-not-allowed"
-                    )}
-                    data-testid="send-button"
-                    disabled={!(input.trim() && canSend)}
-                    status={status}
-                    variant="secondary"
-                  >
-                    <ArrowUpIcon className="size-4" />
-                  </PromptInputSubmit>
-                </span>
-              </TooltipTrigger>
-              {canSend ? null : (
-                <TooltipContent side="top">{sendHint}</TooltipContent>
-              )}
-            </Tooltip>
-          )}
-        </PromptInputFooter>
+        <ComposerActions
+          canSend={canSend}
+          connected={connected}
+          hasText={Boolean(input.trim())}
+          onModelChange={onModelChange}
+          selectedModelId={selectedModelId}
+          sendHint={sendHint}
+          setMessages={setMessages}
+          status={status}
+          stop={stop}
+        />
       </PromptInput>
 
       <ComposerAttribution />
     </div>
-  );
-}
-
-/**
- * Quiet credit line under the composer for the two projects this app is
- * built on. Sits inside the same sticky footer as the input, so it can never
- * scroll over the conversation above it, and wraps at narrow widths instead
- * of forcing extra height onto the composer on mobile.
- */
-function ComposerAttribution() {
-  return (
-    <p className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 px-2 text-center text-[11px] text-muted-foreground/60">
-      <span className="inline-flex items-center gap-1">
-        built by
-        <a
-          className="inline-flex items-center gap-0.5 underline decoration-muted-foreground/30 underline-offset-2 hover:text-foreground hover:decoration-foreground/50"
-          href="https://themonk.dev"
-          rel="noopener noreferrer"
-          target="_blank"
-        >
-          themonk.dev
-          <ExternalLinkIcon className="size-3" />
-        </a>
-        using
-        <a
-          className="inline-flex items-center gap-0.5 underline decoration-muted-foreground/30 underline-offset-2 hover:text-foreground hover:decoration-foreground/50"
-          href="https://ai-oauth.themonk.dev"
-          rel="noopener noreferrer"
-          target="_blank"
-        >
-          ai-oauth-sdk
-          <ExternalLinkIcon className="size-3" />
-        </a>
-      </span>
-      <span aria-hidden="true">·</span>
-      <span className="inline-flex items-center gap-1">
-        Chat interface based on
-        <a
-          className="inline-flex items-center gap-0.5 underline decoration-muted-foreground/30 underline-offset-2 hover:text-foreground hover:decoration-foreground/50"
-          href="https://vercel.com/templates/next.js/chatbot"
-          rel="noopener noreferrer"
-          target="_blank"
-        >
-          Vercel's Next.js AI Chatbot template
-          <ExternalLinkIcon className="size-3" />
-        </a>
-      </span>
-    </p>
   );
 }
 
@@ -565,21 +261,27 @@ export const MultimodalInput = memo(
     if (prevProps.input !== nextProps.input) {
       return false;
     }
+
     if (prevProps.status !== nextProps.status) {
       return false;
     }
+
     if (!equal(prevProps.attachments, nextProps.attachments)) {
       return false;
     }
+
     if (prevProps.selectedModelId !== nextProps.selectedModelId) {
       return false;
     }
+
     if (prevProps.editingMessage !== nextProps.editingMessage) {
       return false;
     }
+
     if (prevProps.isLoading !== nextProps.isLoading) {
       return false;
     }
+
     if (prevProps.messages.length !== nextProps.messages.length) {
       return false;
     }
@@ -587,275 +289,3 @@ export const MultimodalInput = memo(
     return true;
   }
 );
-
-/**
- * cmdk filters and tracks selection by this string, so it has to be unique
- * per row (providers can and do resell the same model under the same
- * display name — see `ProviderMark` below) while still containing the text a
- * reader would actually type to search.
- */
-function itemValue(providerId: string, model: Model): string {
-  return `${model.name} ${registry[providerId].label} ${providerId}:${model.id}`;
-}
-
-/*
- * The mark is shown on every row, not just the group heading: two connected
- * providers can resell the same underlying model under the same display name
- * (GitHub Copilot and OpenRouter both carry "Claude Sonnet 4.5"), and cmdk's
- * search collapses the grouping that would otherwise disambiguate them. It now
- * lives in `./provider-mark`, shared with the attribution line under a reply so
- * the same provider reads the same way in both places.
- */
-
-function ModelSelectorOption({
-  model,
-  onSelect,
-  providerId,
-  selected,
-}: {
-  model: Model;
-  onSelect: (providerId: string, model: Model) => void;
-  providerId: string;
-  selected: boolean;
-}) {
-  const handleSelect = useCallback(() => {
-    onSelect(providerId, model);
-  }, [model, onSelect, providerId]);
-
-  return (
-    <ModelSelectorItem
-      className={cn(
-        // Every row carries the border so only its colour changes when the
-        // choice moves. Drawing it on the chosen row alone would add a pixel to
-        // each side and nudge the whole list.
-        "flex w-full items-center gap-2 border border-transparent transition-colors",
-        // `data-[selected]` is cmdk's keyboard cursor, which is not the same
-        // thing as the chosen model — hence the second, separate signal.
-        "data-[selected=true]:bg-muted data-[selected=true]:text-foreground",
-        selected && "border-dashed border-foreground/50"
-      )}
-      onSelect={handleSelect}
-      value={itemValue(providerId, model)}
-    >
-      <ProviderMark providerId={providerId} />
-      <ModelSelectorName>{model.name}</ModelSelectorName>
-    </ModelSelectorItem>
-  );
-}
-
-/** One connected provider's models, in the order they should be grouped. */
-type ModelGroup = { providerId: string; models: Model[] };
-
-/**
- * Takes the connection map rather than calling `useConnectedProviders()` for
- * itself: the composer above already holds one for its send gate, and two
- * instances in the same subtree means two full storage sweeps on mount and on
- * every revocation, describing the same fact. Sharing the one map also means
- * the picker and the gate cannot disagree about who is connected.
- */
-function useModelGroups(connected: ConnectedProviders): {
-  groups: ModelGroup[];
-} {
-  const [fetched, setFetched] = useState<Record<string, Model[]>>({});
-
-  useEffect(() => {
-    let cancelled = false;
-    const entries = [...connected.entries()];
-
-    Promise.all(
-      entries.map(
-        async ([id, token]) => [id, await fetchModelsFor(id, token)] as const
-      )
-    ).then((results) => {
-      if (!cancelled) {
-        setFetched(Object.fromEntries(results));
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [connected]);
-
-  const groups = PROVIDER_ORDER.filter((id) => connected.has(id)).map((id) => ({
-    models: fetched[id] ?? modelsFor(id),
-    providerId: id,
-  }));
-
-  return { groups };
-}
-
-function PureModelSelectorCompact({
-  connected,
-  selectedModelId,
-  onModelChange,
-}: {
-  connected: ConnectedProviders;
-  selectedModelId: string;
-  onModelChange?: (modelId: string, providerId: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const { setActiveId } = useProviderAuth();
-  const { groups } = useModelGroups(connected);
-
-  /**
-   * `getSelectionProviderId()` (from `hooks/use-active-chat.tsx`) is the
-   * authoritative answer: it is written in lockstep with `currentModelId`
-   * — the same `setCurrentModelId` call this component's own `onModelChange`
-   * triggers, and the same recovery effect that moves `currentModelId` on
-   * its own (connecting the first provider, recovering after the owning
-   * provider disconnects). A component-local ref here previously stood in
-   * for that answer, but `MultimodalInput` remounts on `/` <-> `/chat/[id]`
-   * navigation while the chat context above it does not, so the ref lost
-   * the association on every such navigation even though the selection
-   * itself was still live. Reading the module-level mirror instead survives
-   * exactly as long as `currentModelId` does, without adding a 15th member
-   * to the frozen context contract.
-   */
-  const selectedProviderId = getSelectionProviderId();
-
-  /**
-   * The name to show for the model that is actually selected.
-   *
-   * Resolved against three lists, in order, and the order is the fix for a
-   * flake that read as "some loads show 'Select a model' despite a valid
-   * token and a 200 models response".
-   *
-   * It used to be resolved against the live listing alone, which is the one
-   * list that can legitimately *not* contain the selection. Only `activeId`
-   * is persisted across a load — `currentModelId` is not — so
-   * `use-active-chat` re-derives the selection from `defaultModelFor`, a
-   * pinned id out of the static catalogue in `lib/oauth/models.ts`. Meanwhile
-   * `useModelGroups` *replaces* that catalogue with `fetched[id]` the moment
-   * the provider answers, and a provider whose live ids differ from the
-   * pinned ones — Claude answers `claude-sonnet-4-5` where the catalogue
-   * pins `claude-sonnet-4-5-20250929` — no longer carries the selected id.
-   * So the successful response was what blanked the label, and picking any
-   * model by hand fixed it for the life of that tab, which is what made it
-   * look like a hydration race.
-   *
-   * Every step stays keyed on `selectedProviderId`, the owner
-   * `getSelectionProviderId()` reports, so this cannot start naming another
-   * provider's model — the mismatch this component is careful about
-   * elsewhere. The last step is the id itself: the reader is genuinely on
-   * that model, and the send gate agrees and always did (it asks
-   * `resolveRequest`, never the listing), so showing the id is honest where
-   * "Select a model" is not. That phrase now means only what it says —
-   * that there is no selection.
-   */
-  const selectedModel = selectedProviderId
-    ? ((
-        groups.find((group) => group.providerId === selectedProviderId)
-          ?.models ?? []
-      ).find((model) => model.id === selectedModelId) ??
-      modelsFor(selectedProviderId).find(
-        (model) => model.id === selectedModelId
-      ) ??
-      (selectedModelId
-        ? { id: selectedModelId, name: selectedModelId }
-        : undefined))
-    : undefined;
-
-  const handleSelect = useCallback(
-    (providerId: string, model: Model) => {
-      setActiveId(providerId);
-      onModelChange?.(model.id, providerId);
-      setCookie("chat-model", model.id);
-      setOpen(false);
-      setTimeout(() => {
-        document
-          .querySelector<HTMLTextAreaElement>(
-            "[data-testid='multimodal-input']"
-          )
-          ?.focus();
-      }, 50);
-    },
-    [onModelChange, setActiveId]
-  );
-
-  return (
-    <ModelSelector onOpenChange={setOpen} open={open}>
-      <ModelSelectorTrigger asChild>
-        <Button
-          className="h-7 max-w-[200px] justify-between gap-1.5 rounded-lg px-2 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
-          data-testid="model-selector"
-          variant="ghost"
-        >
-          {selectedProviderId ? (
-            <ProviderMark providerId={selectedProviderId} />
-          ) : null}
-          <ModelSelectorName>
-            {selectedModel?.name ?? "Select a model"}
-          </ModelSelectorName>
-        </Button>
-      </ModelSelectorTrigger>
-      <ModelSelectorContent
-        commandDefaultValue={
-          selectedProviderId && selectedModel
-            ? itemValue(selectedProviderId, selectedModel)
-            : undefined
-        }
-      >
-        <ModelSelectorInput placeholder="Search models..." />
-        <ModelSelectorList>
-          {groups.length === 0 ? (
-            <ModelSelectorEmpty>
-              Connect a provider to see its models.
-            </ModelSelectorEmpty>
-          ) : (
-            groups.map(({ providerId, models }) => (
-              <ModelSelectorGroup
-                heading={registry[providerId].label}
-                key={providerId}
-              >
-                {models.map((model) => (
-                  <ModelSelectorOption
-                    key={`${providerId}:${model.id}`}
-                    model={model}
-                    onSelect={handleSelect}
-                    providerId={providerId}
-                    selected={
-                      providerId === selectedProviderId &&
-                      model.id === selectedModelId
-                    }
-                  />
-                ))}
-              </ModelSelectorGroup>
-            ))
-          )}
-        </ModelSelectorList>
-      </ModelSelectorContent>
-    </ModelSelector>
-  );
-}
-
-const ModelSelectorCompact = memo(PureModelSelectorCompact);
-
-function PureStopButton({
-  stop,
-  setMessages,
-}: {
-  stop: () => void;
-  setMessages: UseChatHelpers<ChatMessage>["setMessages"];
-}) {
-  const handleClick = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      stop();
-      setMessages((messages) => messages);
-    },
-    [setMessages, stop]
-  );
-
-  return (
-    <Button
-      className="h-7 w-7 rounded-xl bg-foreground p-1 text-background transition-all duration-200 hover:opacity-85 active:scale-95 disabled:bg-muted disabled:text-muted-foreground/25 disabled:cursor-not-allowed"
-      data-testid="stop-button"
-      onClick={handleClick}
-    >
-      <StopIcon size={14} />
-    </Button>
-  );
-}
-
-const StopButton = memo(PureStopButton);

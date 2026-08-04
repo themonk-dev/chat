@@ -22,11 +22,6 @@ function PureChatHeader() {
 
       <ManageProviders />
 
-      {/*
-       * `ml-auto` rather than a spacer, so the byline stays pinned right while
-       * the controls keep their natural widths on the left — the header has no
-       * fixed columns to break.
-       */}
       <a
         className="ml-auto text-[11px] text-muted-foreground transition-colors hover:text-foreground"
         href="https://themonk.dev"

@@ -3,19 +3,9 @@ import { z } from "zod";
 import type { getWeather } from "./ai/tools/get-weather";
 
 /**
- * Which provider answered, and with which model.
- *
- * A thread here is deliberately not bound to a provider (`lib/chats/store.ts`
- * says why), and the picker offers every connected provider's models at once —
- * so one thread can hold a Claude reply followed by a Grok one, and nothing
- * else in a stored message says which was which.
- *
- * The two ids travel as one object rather than as two sibling fields for the
- * same reason `selectionRef` in `hooks/use-active-chat.tsx` does: a model id
- * only means something alongside the provider it was sent to (two providers
- * resell the same model under the same name, and a slug from one provider is a
- * 404 at another). One object cannot be written half-way, and one guard on the
- * read side — `attributionOf` below — either yields both or yields nothing.
+ * One thread can hold a Claude reply followed by a Grok one, and nothing else
+ * in a stored message says which. The two ids travel as one object because a
+ * model id only means something alongside the provider it was sent to.
  */
 export const messageAttributionSchema = z.object({
   modelId: z.string(),
@@ -25,11 +15,8 @@ export const messageAttributionSchema = z.object({
 export type MessageAttribution = z.infer<typeof messageAttributionSchema>;
 
 /**
- * Every field is optional, and that is the contract rather than an oversight:
- * this shape describes messages already sitting in readers' `localStorage`,
- * written before either field existed. Nothing may assume presence, and the
- * absence of attribution is rendered as nothing at all — never as the provider
- * that happens to be connected now.
+ * Every field is optional by contract: this describes messages already in
+ * readers' `localStorage`, written before either field existed.
  */
 export const messageMetadataSchema = z.object({
   attribution: messageAttributionSchema.optional(),
@@ -39,14 +26,8 @@ export const messageMetadataSchema = z.object({
 export type MessageMetadata = z.infer<typeof messageMetadataSchema>;
 
 /**
- * The one way to read attribution off a message.
- *
- * Hand-written rather than a `safeParse` because it runs per assistant message
- * per render, but it makes the same judgement the schema does: metadata comes
- * back from a text file the reader's browser owns, so a half-written or
- * hand-edited pair is a real input, and half a pair is a guess with extra
- * steps. Either both ids are there, or the caller gets `undefined` and shows
- * nothing.
+ * Hand-written rather than `safeParse` because it runs per message per render,
+ * but it makes the same judgement: either both ids, or nothing.
  */
 export function attributionOf(
   message: { metadata?: MessageMetadata } | undefined
@@ -75,20 +56,9 @@ export type WaitingStatusData = {
 };
 
 /**
- * A send that failed, carried on the transcript as a part of an assistant
- * message rather than held in `useChat`'s transient `error` field.
- *
- * That placement is the whole point. A failure is something the thread *has*,
- * in the position the reply would have occupied — so it renders where the
- * reader is already looking, survives the round trip through
- * `localStorage` that every other message survives, and comes back on reload
- * beside the question that produced it. A toast is gone in seconds and a
- * `useChat` error field is gone on the next send.
- *
- * `retryOf` is the id of the user message that failed, which is what makes
- * the Retry button possible after a reload: `regenerate({ messageId })` slices
- * the transcript back to that message and asks again, so nothing has to be
- * remembered outside the stored thread.
+ * Carried on the transcript rather than in `useChat`'s transient `error`, so a
+ * failure survives the reload every other message survives. `retryOf` is what
+ * makes Retry work afterwards, with nothing remembered outside the thread.
  */
 export type ChatErrorData = {
   detail: string;

@@ -20,7 +20,8 @@ vi.mock("@/lib/oauth/storage", () => ({
   clientFor: (id: string) => mockClientFor(id),
 }));
 
-import { defaultModelFor, fetchModelsFor, modelsFor } from "./models";
+import { defaultModelFor, modelsFor } from "./model-catalog";
+import { fetchModelsFor } from "./models";
 import { proxiedProviders } from "./providers";
 
 describe("modelsFor / defaultModelFor", () => {

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { memo, useCallback } from "react";
+import type { Chat } from "@/lib/chats/history";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,7 +13,6 @@ import {
   SidebarMenuItem,
 } from "../ui/sidebar";
 import { MoreHorizontalIcon, TrashIcon } from "./icons";
-import type { Chat } from "./sidebar-history";
 
 const PureChatItem = ({
   chat,
@@ -70,9 +70,10 @@ const PureChatItem = ({
   );
 };
 
-export const ChatItem = memo(PureChatItem, (prevProps, nextProps) => {
-  if (prevProps.isActive !== nextProps.isActive) {
-    return false;
-  }
-  return true;
-});
+export const ChatItem = memo(
+  PureChatItem,
+  (prevProps, nextProps) =>
+    prevProps.isActive === nextProps.isActive &&
+    prevProps.chat.id === nextProps.chat.id &&
+    prevProps.chat.title === nextProps.chat.title
+);

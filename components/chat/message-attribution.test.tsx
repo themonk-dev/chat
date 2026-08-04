@@ -44,8 +44,6 @@ function renderMessage(message: ChatMessage) {
       isLoading={false}
       message={message}
       regenerate={noopRegenerate}
-      requiresScrollPadding={false}
-      setMessages={noop}
     />
   );
 }

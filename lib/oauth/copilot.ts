@@ -1,4 +1,5 @@
 import type { ResolvedCredential, TokenSet } from "@ai-oauth-sdk/core";
+import { BoundedMap } from "@/lib/bounded-map";
 import { assertBrowser } from "./browser-only";
 import { proxiedProviders } from "./providers";
 
@@ -7,8 +8,16 @@ type CachedCopilotCredential = {
   expiresAt: number;
 };
 
+/**
+ * The key is the `ghu_` token, and a refresh rotates it — so an unbounded map
+ * grows for the life of the tab while only the newest is ever read.
+ */
+const COPILOT_CACHE_LIMIT = 4;
+
 /** One exchange per `ghu_` token; see `copilotCredentialFor` for why. */
-const copilotCredentials = new Map<string, CachedCopilotCredential>();
+const copilotCredentials = new BoundedMap<string, CachedCopilotCredential>(
+  COPILOT_CACHE_LIMIT
+);
 
 /** Renew this far ahead of the credential's real expiry, to absorb latency. */
 const COPILOT_EXPIRY_SKEW_MS = 60_000;
@@ -17,36 +26,13 @@ const COPILOT_EXPIRY_SKEW_MS = 60_000;
 const COPILOT_DEFAULT_TTL_MS = 25 * 60 * 1000;
 
 /**
- * The credential a `ghu_` GitHub token grants is not the one Copilot's API
- * accepts — that has to be exchanged for a short-lived Copilot token first,
- * which is what carries the descriptor's `Copilot-Integration-Id` header
- * alongside it. `exchangeCredential` does both and is read off the
- * descriptor rather than hardcoded, so a change to either lands here for
- * free.
+ * A `ghu_` token has to be exchanged for a short-lived Copilot credential
+ * first. Cached because the exchange goes straight to `api.github.com` — the
+ * one round trip with no proxy retry behind it — and lives in its own module so
+ * the chat adapter and the model listing share one cache.
  *
- * The exchange call itself goes straight to `api.github.com`, never through
- * our proxy, so the `ghu_` token travels only to GitHub — but that also
- * means it is the one round trip in this flow with no proxy caching or
- * retry logic backing it up, so it is cached here rather than repeated on
- * every message: the resulting token is valid for roughly 25 minutes, and
- * re-exchanging on every turn would multiply both latency and rate-limit
- * exposure on the path we control least.
- *
- * This lives in its own module rather than in `adapters.ts` because both
- * callers that need it — the chat adapter and the model listing — must use
- * the *same* cache, and `models.ts` importing `adapters.ts` would drag every
- * `@ai-sdk/*` provider package into the model picker's path for two headers
- * and a token.
- *
- * Browser-only, and asserted rather than assumed. Keying the cache by the
- * `ghu_` token is a genuine read guard — a second reader cannot pull the
- * first's entry without already holding their token — but it says nothing at
- * all about where the entries live. Run on the server this becomes an
- * unbounded, process-wide store of exchanged Copilot credentials held for the
- * life of the lambda, which is what this app tells its readers does not exist.
- * What kept it client-only was a guard in a neighbouring file (`upstreamBase`
- * in `adapters.ts` throws off-browser) and a root-relative fetch URL that
- * cannot resolve on a server. Neither is in this file, and neither is checked.
+ * Browser-only and asserted: on a server this map would be a process-wide store
+ * of exchanged credentials, which is what this app tells readers does not exist.
  */
 export async function copilotCredentialFor(
   accessToken: string
@@ -57,6 +43,12 @@ export async function copilotCredentialFor(
 
   if (cached && Date.now() < cached.expiresAt - COPILOT_EXPIRY_SKEW_MS) {
     return cached.credential;
+  }
+
+  // Dropped rather than left to be overwritten, since the exchange below can
+  // fail and a bounded map should not spend a slot on a dead entry.
+  if (cached) {
+    copilotCredentials.delete(accessToken);
   }
 
   const provider = proxiedProviders["github-copilot"];

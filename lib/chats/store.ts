@@ -8,25 +8,15 @@ export type StoredChat = {
 };
 
 /**
- * Chats live in `localStorage` and nowhere else. There is no account here and
- * no server that could hold them — which is the point, and is why the sidebar
- * is the only index that exists.
- *
- * Deliberately not keyed by provider. A thread records what was said, not who
- * said it, so reopening one continues it with whatever provider is connected at
- * the time.
+ * Chats live in `localStorage` and nowhere else, and are deliberately not keyed
+ * by provider: a thread records what was said, not who said it.
  */
 const KEY = "ai-oauth-chat:index";
 
 /*
- * `localStorage` fires no event for writes from the same document, so readers
- * cannot learn about a save on their own. The store therefore announces its own
- * writes, and it does so from `write` rather than from each mutation — one
- * place, which a new mutation cannot forget to call.
- *
- * The snapshot is a cached array rather than a counter. `useSyncExternalStore`
- * compares snapshots by identity, so it must be the *same* array until storage
- * actually moves — building a fresh one per call would re-render forever.
+ * `localStorage` fires no event for same-document writes, so the store
+ * announces its own — from `write`, which no new mutation can forget to call.
+ * The snapshot is cached because `useSyncExternalStore` compares by identity.
  */
 const listeners = new Set<() => void>();
 let cached: StoredChat[] | undefined;
@@ -87,11 +77,7 @@ export function deleteChat(id: string): void {
   write(chats);
 }
 
-/**
- * A corrupted or half-written store is answered with an empty one rather than
- * an exception. Losing the history is bad; a chat app that will not start
- * because of it is worse, and the next write repairs the file.
- */
+/** A corrupt store answers empty rather than throwing; the next write repairs it. */
 function read(): Map<string, StoredChat> {
   if (typeof localStorage === "undefined") {
     return new Map();
@@ -128,10 +114,7 @@ function write(chats: Map<string, StoredChat>): void {
       listener();
     }
   } catch {
-    /*
-     * Quota exhausted, or storage disabled by the browser. The conversation on
-     * screen is unaffected; only its persistence is lost, and telling the
-     * reader mid-sentence would be worse than dropping it silently.
-     */
+    // Quota exhausted, or storage disabled. Only persistence is lost, and
+    // saying so mid-sentence would be worse than dropping it silently.
   }
 }

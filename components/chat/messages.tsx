@@ -1,34 +1,30 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { ArrowDownIcon } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
-import { useMessages } from "@/hooks/use-messages";
+import { useScrollToBottom } from "@/hooks/use-scroll-to-bottom";
 import type { ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { useDataStream } from "./data-stream-provider";
 import { Greeting } from "./greeting";
-import { PreviewMessage, ThinkingMessage } from "./message";
+import { PreviewMessage } from "./message";
+import { ThinkingMessage } from "./message-waiting";
 
 type MessagesProps = {
   addToolApprovalResponse: UseChatHelpers<ChatMessage>["addToolApprovalResponse"];
   chatId: string;
   status: UseChatHelpers<ChatMessage>["status"];
   messages: ChatMessage[];
-  setMessages: UseChatHelpers<ChatMessage>["setMessages"];
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
   isLoading?: boolean;
-  selectedModelId: string;
   onEditMessage?: (message: ChatMessage) => void;
 };
 
-function PureMessages({
+export function Messages({
   addToolApprovalResponse,
   chatId,
   status,
   messages,
-  setMessages,
   regenerate,
   isLoading,
-  selectedModelId: _selectedModelId,
   onEditMessage,
 }: MessagesProps) {
   const {
@@ -36,25 +32,25 @@ function PureMessages({
     endRef: messagesEndRef,
     isAtBottom,
     scrollToBottom,
-    hasSentMessage,
     reset,
-  } = useMessages({
-    status,
-  });
-
-  useDataStream();
+  } = useScrollToBottom();
 
   const prevChatIdRef = useRef(chatId);
+
   useEffect(() => {
-    if (prevChatIdRef.current !== chatId) {
-      prevChatIdRef.current = chatId;
-      reset();
+    if (prevChatIdRef.current === chatId) {
+      return;
     }
+
+    prevChatIdRef.current = chatId;
+    reset();
   }, [chatId, reset]);
 
   const handleScrollToBottom = useCallback(() => {
     scrollToBottom("smooth");
   }, [scrollToBottom]);
+
+  const lastIndex = messages.length - 1;
 
   return (
     <div className="relative flex-1 bg-background">
@@ -63,6 +59,7 @@ function PureMessages({
           <Greeting />
         </div>
       )}
+
       <div
         className={cn(
           "absolute inset-0 touch-pan-y overflow-y-auto",
@@ -74,17 +71,11 @@ function PureMessages({
           {messages.map((message, index) => (
             <PreviewMessage
               addToolApprovalResponse={addToolApprovalResponse}
-              isLoading={
-                status === "streaming" && messages.length - 1 === index
-              }
+              isLoading={status === "streaming" && index === lastIndex}
               key={message.id}
               message={message}
               onEdit={onEditMessage}
               regenerate={regenerate}
-              requiresScrollPadding={
-                hasSentMessage && index === messages.length - 1
-              }
-              setMessages={setMessages}
             />
           ))}
 
@@ -114,5 +105,3 @@ function PureMessages({
     </div>
   );
 }
-
-export const Messages = PureMessages;

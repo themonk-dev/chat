@@ -15,7 +15,10 @@ export function submitEditedMessage({
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
 }) {
   setMessages((messages) => {
-    const index = messages.findIndex((m) => m.id === message.id);
+    const index = messages.findIndex(
+      (candidate) => candidate.id === message.id
+    );
+
     if (index === -1) {
       return messages;
     }

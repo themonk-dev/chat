@@ -1,20 +1,7 @@
 /**
- * Makes Google's Code Assist surface look like the ordinary Generative Language
- * API, so the stock `@ai-sdk/google` adapter can drive it unmodified.
- *
- * Code Assist is the surface a Gemini OAuth token is scoped to, and it is not
- * the documented API — it wraps the standard `generateContent` body as
- * `{model, project, request}` and wraps every reply as `{response}`. Since the
- * inner payload is byte-for-byte the standard one, a `fetch` that adds the
- * envelope on the way out and removes it on the way back is most of the
- * difference.
- *
- * The other part is the URL. `@ai-sdk/google` always builds
- * `${baseURL}/${models/{id}}:{method}` — there is no way to configure it
- * otherwise — but Code Assist's real route is `${base}:{method}` with no
- * `/models/{id}` segment at all; the model travels in the envelope instead.
- * `stripModelSegment` removes exactly that segment so the request lands on a
- * route Code Assist actually serves.
+ * Code Assist wraps the standard `generateContent` body as
+ * `{model, project, request}` and every reply as `{response}`, so adding and
+ * removing the envelope in `fetch` lets the stock adapter drive it unmodified.
  */
 export function wrapCodeAssist(
   project: string,
@@ -26,14 +13,8 @@ export function wrapCodeAssist(
 
     const response = await inner(stripModelSegment(url), {
       ...init,
-      /*
-       * `user_prompt_id` is a per-turn identifier gemini-cli sends on every
-       * Code Assist call, and the predecessor playground sent it too; the port
-       * dropped it. Whether Code Assist requires it, meters differently
-       * without it, or ignores it is not something this app can observe — but
-       * a fresh UUID costs nothing, and matching the client whose OAuth scope
-       * this token belongs to is the safer side of an unknown.
-       */
+      // `user_prompt_id` is what gemini-cli sends per turn; matching the
+      // client this token's scope belongs to is the safer side of an unknown.
       body: JSON.stringify({
         model,
         project,
@@ -66,25 +47,9 @@ export function wrapCodeAssist(
 }
 
 /**
- * Drops the `/models/{id}` segment `@ai-sdk/google` hardcodes into the request
- * URL.
- *
- * Code Assist's method routes are `POST {base}:generateContent`, not the
- * public API's `POST {base}/models/{id}:generateContent` — the model is only
- * ever read out of the envelope body. Left in place, the extra segment is a
- * route Code Assist has never registered, and the request 404s before the
- * envelope wrapping above gets a chance to matter.
- *
- * A `Request` object is returned unchanged: the SDK only ever calls this with
- * a string URL, and rewriting a `Request`'s URL means constructing a new one
- * anyway, which is no simpler than leaving the (rare, likely test-only) case
- * alone.
- *
- * The regex is applied to the path only, split off before the `?`. Applied
- * to the whole URL it can also match inside a query string that happens to
- * contain the same `/models/{id}:` shape — a real caller would never send
- * one, but nothing about matching the full string rules it out either, and
- * "cannot over-strip" is exactly the guarantee this function needs to hold.
+ * Code Assist routes are `POST {base}:generateContent`, so the `/models/{id}`
+ * segment `@ai-sdk/google` hardcodes 404s. Matched on the path only, so a query
+ * string of the same shape cannot be over-stripped.
  */
 function stripModelSegment(
   url: string | URL | Request
@@ -121,26 +86,11 @@ function rewriteLine(line: string): string {
 }
 
 /**
- * Rewrites each `data:` line rather than the whole body, because the stream has
- * to keep flowing — buffering it to unwrap once would hold the reply until the
- * last token before the reader saw the first.
- *
- * That still requires a line buffer *within* the transform, though. A network
- * chunk boundary has no relationship to a line boundary — a multi-KB Gemini
- * event routinely straddles one — and a `data:` line split across two chunks
- * fails `JSON.parse` on both halves independently: the first half is
- * incomplete JSON, the second doesn't start with `data:` at all, so both pass
- * through unrewritten and the envelope survives into what `@ai-sdk/google`
- * parses. That is not an error on either end, just an object with no
- * `candidates` — silent token loss, not a thrown one. Carrying the trailing
- * (possibly partial) line across `transform` calls, and processing whatever
- * is left in `flush()`, is what makes each rewrite decision operate on a
- * complete line regardless of how the bytes were chunked.
- *
- * `flush()`'s own `decoder.decode()` call (no arguments) also matters on its
- * own: that is what flushes a multi-byte UTF-8 character split across the
- * very last two chunks of the stream, which `{ stream: true }` deliberately
- * holds back mid-stream and would otherwise drop.
+ * Per line rather than per body, so the stream keeps flowing — and buffered
+ * across chunks, because a `data:` line split over two chunks would fail
+ * `JSON.parse` on both halves and leak the envelope downstream as silent token
+ * loss. `flush()`'s argument-less `decode()` releases a trailing multi-byte
+ * character.
  */
 function unwrapStream(
   body: ReadableStream<Uint8Array>
@@ -155,15 +105,8 @@ function unwrapStream(
         buffer += decoder.decode();
 
         if (buffer) {
-          /*
-           * The trailing "\n" matters as much as flushing at all. `transform`
-           * re-appends it to every line it emits, because a line the source
-           * terminated must stay terminated; a tail flushed without one hands
-           * the SSE parser an unterminated line, which it holds and then drops
-           * when the stream ends. That is the same event lost twice — once
-           * here, once downstream. `withSseTailFlush` adds the blank line that
-           * turns this terminated line into a dispatched event.
-           */
+          // The trailing "\n" matters: a tail flushed without one hands the
+          // SSE parser an unterminated line, which it holds and then drops.
           controller.enqueue(encoder.encode(`${rewriteLine(buffer)}\n`));
         }
       },
@@ -171,11 +114,8 @@ function unwrapStream(
         buffer += decoder.decode(chunk, { stream: true });
 
         const lines = buffer.split("\n");
-        // The last element is whatever follows the final "\n" in the
-        // buffer — empty when the chunk ended exactly on a line break,
-        // otherwise a partial line completed by whatever arrives next.
-        // Either way it is not yet a complete line, so it is held back
-        // rather than rewritten.
+
+        // Whatever follows the final "\n" is not yet a complete line.
         buffer = lines.pop() ?? "";
 
         if (lines.length > 0) {

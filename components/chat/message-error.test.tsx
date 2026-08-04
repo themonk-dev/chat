@@ -61,8 +61,6 @@ function renderMessage(
       regenerate={
         regenerate as Parameters<typeof PreviewMessage>[0]["regenerate"]
       }
-      requiresScrollPadding={false}
-      setMessages={noop}
     />
   );
 }

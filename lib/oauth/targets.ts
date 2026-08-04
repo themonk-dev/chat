@@ -2,17 +2,9 @@ import type { ProviderConfig } from "@ai-oauth-sdk/core";
 import { providers } from "@ai-oauth-sdk/core";
 
 /**
- * Turns a request path into the upstream URL it is allowed to reach.
- *
- * This is the security boundary of the whole proxy. The caller supplies a
- * provider id and, for API calls, a path below that provider's base — never a
- * host, never a scheme, never a full URL. Every destination is read back out of
- * the SDK's own descriptor, so the set of hosts this app can be made to talk to
- * is fixed at build time and is exactly the set the SDK already ships.
- *
- * Returns `undefined` for anything that does not resolve, which the caller
- * turns into a 404. Silence rather than an explanation: a prober learns nothing
- * about which providers exist from a uniform miss.
+ * The security boundary of the proxy: the caller supplies a provider id and a
+ * path, never a host or scheme, and every destination is read out of the SDK's
+ * own descriptor. `undefined` becomes a uniform 404, so a prober learns nothing.
  */
 export function resolveTarget(
   kind: string,
@@ -48,25 +40,11 @@ function asUrl(value: string | undefined): URL | undefined {
 }
 
 /**
- * Joins a caller-supplied path onto the provider's API base, then checks the
- * result did not climb out of it.
- *
- * Segments are passed through exactly as received rather than re-encoded. They
- * arrive already percent-encoded, and re-encoding them corrupts any path that
- * legitimately contains a reserved character: Google's Code Assist addresses
- * its methods as `/v1internal:loadCodeAssist`, and escaping that colon to `%3A`
- * turns every call into a 404.
- *
- * Which leaves two things to guard, both done before the join rather than after:
- *
- * `.` and `..` are rejected outright. Setting `pathname` normalises dot
- * segments, so a `..` would silently climb out of the base and the containment
- * check below would see an already-collapsed path.
- *
- * The join builds the pathname by concatenation instead of `new URL(rel, base)`.
- * That constructor reads anything before the first slash as a scheme, so
- * `v1internal:loadCodeAssist` parses as an absolute URL and escapes the base
- * entirely — the very reason the encoding was there in the first place.
+ * Segments pass through unencoded, because re-encoding breaks Code Assist's
+ * `/v1internal:loadCodeAssist`. That leaves two guards, both before the join:
+ * dot segments are rejected outright (setting `pathname` would normalise them
+ * away), and the path is concatenated rather than built with `new URL(rel,
+ * base)`, which would read `v1internal:` as a scheme and escape the base.
  */
 function underBase(base: string | undefined, tail: string[]): URL | undefined {
   if (!base || tail.length === 0) {
@@ -110,12 +88,8 @@ function safeDecode(part: string): string {
 }
 
 /**
- * Copies the caller's query string onto the resolved target.
- *
- * Some descriptors carry their own query — Codex pins a `client_version` — so
- * the caller's params are merged in rather than replacing what is already
- * there. Anything the descriptor set wins, since that is the SDK's own
- * requirement rather than the page's.
+ * Merged rather than replaced: some descriptors carry their own query (Codex
+ * pins a `client_version`), and anything the descriptor set wins.
  */
 export function withQuery(target: URL, source: URL): URL {
   const merged = new URL(target);

@@ -22,16 +22,16 @@ vi.mock("shiki", () => ({ createHighlighter: vi.fn() }));
 describe("highlightCode on the server", () => {
   it("caches nothing and starts no highlighter", async () => {
     const { createHighlighter } = await import("shiki");
-    const { highlightCode } = await import("./code-block");
+    const { highlightCode } = await import("./code-block-highlighter");
 
-    expect(highlightCode("const a = 1;\n", "typescript")).toBeNull();
-    expect(highlightCode("const a = 1;\n", "typescript")).toBeNull();
+    expect(highlightCode("const a = 1;\n", "typescript").tokens).toBeNull();
+    expect(highlightCode("const a = 1;\n", "typescript").tokens).toBeNull();
 
     expect(createHighlighter).not.toHaveBeenCalled();
   });
 
   it("does not retain a callback the server can never call back", async () => {
-    const { highlightCode } = await import("./code-block");
+    const { highlightCode } = await import("./code-block-highlighter");
     const callback = vi.fn();
 
     highlightCode("secret from another reader\n", "typescript", callback);

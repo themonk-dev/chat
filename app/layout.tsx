@@ -13,15 +13,8 @@ const SHORT_DESCRIPTION =
 const SITE_URL = "https://chat.themonk.dev";
 
 /**
- * Neither block below sets `images`. app/opengraph-image.tsx uses Next's
- * file convention, which auto-populates both `openGraph.images` and
- * `twitter.images` from that one route — verified by inspecting the
- * rendered <head>, which carries a matching og:image and twitter:image
- * (same URL, plus width/height/alt/type) with no images field set here.
- * Setting `images` explicitly here would either duplicate that route's
- * `alt`/`size` exports (another string pair to keep in sync, on top of
- * TITLE/SHORT_DESCRIPTION below) or drop those fields from the tags
- * entirely — Next only fills them in for images it discovers itself.
+ * Neither block sets `images`: `app/opengraph-image.tsx` uses Next's file
+ * convention, which auto-populates both from that one route.
  */
 export const metadata: Metadata = {
   description: DESCRIPTION,
@@ -62,15 +55,18 @@ const THEME_COLOR_SCRIPT = `\
 (function() {
   var html = document.documentElement;
   var meta = document.querySelector('meta[name="theme-color"]');
+
   if (!meta) {
     meta = document.createElement('meta');
     meta.setAttribute('name', 'theme-color');
     document.head.appendChild(meta);
   }
+
   function updateThemeColor() {
     var isDark = html.classList.contains('dark');
     meta.setAttribute('content', isDark ? '${DARK_THEME_COLOR}' : '${LIGHT_THEME_COLOR}');
   }
+
   var observer = new MutationObserver(updateThemeColor);
   observer.observe(html, { attributes: true, attributeFilter: ['class'] });
   updateThemeColor();

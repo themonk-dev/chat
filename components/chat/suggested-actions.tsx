@@ -18,13 +18,8 @@ type SuggestedActionsProps = {
 };
 
 /**
- * Fills the empty-state region above the composer. While the selected
- * provider is disconnected, the four canned prompts would be actively
- * misleading — none of them can send — so this swaps them for an explanation
- * and a way to fix it instead. `key={activeId}` on the dialog and the
- * disconnected check both read straight from `useProviderAuth()`, so
- * switching providers in the dropdown updates this immediately, the same way
- * it does the header button.
+ * While the selected provider is disconnected the canned prompts would be
+ * misleading — none of them can send — so this swaps them for a way to fix it.
  */
 function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
   const { activeId, isConnected } = useProviderAuth();
@@ -56,13 +51,6 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
 
     return (
       <>
-        {/*
-         * One row: what is missing on the left, the way to fix it on the
-         * right — so the card reads as a single statement with an action
-         * attached rather than as three stacked paragraphs. It wraps to two
-         * rows on narrow screens, where a button pinned right would leave a
-         * gap the sentence has to reach across.
-         */}
         <motion.div
           animate={{ opacity: 1, y: 0 }}
           className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/50 bg-card/30 py-2 pr-2 pl-3"
@@ -71,13 +59,6 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
           initial={{ opacity: 0, y: 16 }}
           transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
         >
-          {/*
-           * The clause after the dash used to describe the Send button being
-           * disabled, which the reader can already see. What they cannot see
-           * is where the token goes, and that is the same answer for all
-           * seven providers — so it is said here once, and the standalone
-           * privacy footnote this card used to carry underneath is gone.
-           */}
           <p className="flex items-center gap-2 text-[13px] text-foreground leading-relaxed">
             {Logo ? <Logo className="size-4 shrink-0" /> : null}
             Connect {label} to start chatting — your token never leaves this

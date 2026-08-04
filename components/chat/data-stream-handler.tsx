@@ -3,11 +3,7 @@
 import { useEffect } from "react";
 import { useDataStream } from "./data-stream-provider";
 
-/**
- * Chat titles are no longer server-generated, so there is nothing left here to
- * revalidate a sidebar cache for — `useChats()` refreshes itself when a thread
- * is written. This just drains the stream buffer.
- */
+/** Drains the stream buffer; there is no sidebar cache left to revalidate. */
 export function DataStreamHandler() {
   const { dataStream, setDataStream } = useDataStream();
 

@@ -5,128 +5,33 @@ import type {
   StartedReceiver,
 } from "@ai-oauth-sdk/browser";
 import { OAuthError, readCallback } from "@ai-oauth-sdk/browser";
+import { CALLBACK_CHANNEL, type ChannelMessage } from "./callback-channel";
 import { popupFeatures } from "./popup-window";
 
 /**
  * A popup sign-in that survives the provider severing the popup.
  *
- * The SDK's own `popupReceiver` is built on two things the browser normally
- * guarantees: the popup can reach `window.opener` to post the code back, and
- * the opener can read `popup.closed` to notice the reader gave up. Anthropic
- * takes both away. `claude.ai` answers with
- *
- *     cross-origin-opener-policy: same-origin
- *
- * enforced — not the `-report-only` variant `accounts.google.com` sends —
- * which moves the popup into a fresh browsing-context group the moment it
- * lands there. From that point `window.opener` is `null` *permanently*, even
- * after the popup navigates back to our own origin, and the opener's handle
- * reports `closed === true` for a window that is plainly still on screen.
- *
- * That second half is what shipped as a bug: `popupReceiver`'s close-poller
- * read the severed handle, concluded the reader had closed the window, and
- * failed the sign-in with "the sign-in window was closed before completing"
- * about a second after the popup appeared. Nothing was closed and nothing was
- * cancelled.
- *
- * So this receiver uses neither. The callback page announces itself on a
- * `BroadcastChannel`, which is same-origin and entirely independent of who
- * opened whom — a severed opener relationship does not touch it. And there is
- * no close-poller at all: on a severed handle the signal is a lie, and the
- * dialog's own Cancel is the honest way to give up.
- *
- * `postMessage` from the opener path is still accepted, because the same
- * receiver serves providers that never sever anything (OpenRouter), and
- * because a channel that arrives twice is cheaper to ignore than a code that
- * arrives never.
+ * `claude.ai` sends an enforced `Cross-Origin-Opener-Policy: same-origin`, so
+ * `window.opener` is permanently `null` and our handle reports `closed === true`
+ * for a window still on screen. The SDK's own `popupReceiver` is built on both
+ * signals, and its close-poller failed every Claude sign-in a second after it
+ * opened. This uses a `BroadcastChannel` instead, and never polls `.closed`.
  */
-
-/**
- * The channel both halves meet on. Same-origin by construction — a
- * `BroadcastChannel` cannot cross an origin — so this carries the same
- * guarantee `postCallbackToOpener`'s explicit target origin does.
- */
-export const CALLBACK_CHANNEL = "ai-oauth-chat:callback";
-
-/** The callback page announcing a code; the opener acknowledging receipt. */
-type ChannelMessage =
-  | { kind: "callback"; payload: string }
-  | { kind: "received" };
-
-/**
- * Hands the callback to whichever window is waiting for it, and reports
- * whether one answered.
- *
- * The acknowledgement is not ceremony. The callback page has two very
- * different situations to tell apart — a severed popup whose opener is
- * waiting on the channel, and a reader who pasted `/callback` into their
- * address bar with nothing waiting anywhere — and `window.opener` can no
- * longer distinguish them, because the severed popup has none either. A
- * `BroadcastChannel` post is fire-and-forget, so the only way to know
- * somebody took it is for them to say so.
- */
-export function announceCallback(
-  payload: string,
-  timeoutMs = 1500
-): Promise<boolean> {
-  if (typeof BroadcastChannel === "undefined") {
-    return Promise.resolve(false);
-  }
-
-  return new Promise<boolean>((resolve) => {
-    const channel = new BroadcastChannel(CALLBACK_CHANNEL);
-    let settled = false;
-
-    const finish = (received: boolean) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      clearTimeout(timer);
-      channel.close();
-      resolve(received);
-    };
-
-    channel.onmessage = (event: MessageEvent<ChannelMessage>) => {
-      if (event.data?.kind === "received") {
-        finish(true);
-      }
-    };
-
-    const timer = setTimeout(() => finish(false), timeoutMs);
-
-    channel.postMessage({ kind: "callback", payload } satisfies ChannelMessage);
-  });
-}
 
 export type HandshakePopupOptions = {
   redirectUri: string;
   windowName?: string;
 };
 
-/**
- * Opens the provider's authorization page in a popup and waits for the code,
- * however it comes back.
- */
-export function handshakePopupReceiver(
-  options: HandshakePopupOptions
-): CallbackReceiver {
-  return {
-    id: "handshake-popup",
-    start(context: ReceiverContext): Promise<StartedReceiver> {
-      if (typeof window === "undefined") {
-        return Promise.reject(
-          new OAuthError(
-            "unsupported_runtime",
-            "handshakePopupReceiver requires a browser window."
-          )
-        );
-      }
-
-      return Promise.resolve(startInBrowser(options, context));
-    },
-  };
+/** A severed handle may throw on `close()`, and the sign-in is over by then. */
+function closeQuietly(popup: Window | null): void {
+  try {
+    if (popup && !popup.closed) {
+      popup.close();
+    }
+  } catch {
+    // Not a failed sign-in.
+  }
 }
 
 function startInBrowser(
@@ -142,16 +47,12 @@ function startInBrowser(
     fail = reject;
   });
 
-  // Nothing awaits this promise until `wait()` is called, and the abort below
-  // can reject before that — an unhandled rejection the reader never caused.
+  // Nothing awaits this until `wait()` is called, and the abort below can
+  // reject before that — an unhandled rejection the reader never caused.
   callback.catch(() => undefined);
 
-  /**
-   * The code, from either transport. Parsing is the SDK's (`readCallback`
-   * applies the provider's own `parseCallback`), and a parse that throws is
-   * the sign-in failing, not a message to ignore: a callback carrying
-   * `?error=access_denied` arrives here and must surface.
-   */
+  // A parse that throws is the sign-in failing, not a message to ignore: a
+  // callback carrying `?error=access_denied` arrives here and must surface.
   const accept = (payload: string) => {
     try {
       settle?.(readCallback(context.provider, payload));
@@ -192,7 +93,10 @@ function startInBrowser(
     accept(data.payload);
   };
 
-  window.addEventListener("message", onMessage);
+  function onAbort() {
+    fail?.(new OAuthError("aborted", "Login was aborted."));
+    closeQuietly(popup);
+  }
 
   const cleanup = () => {
     window.removeEventListener("message", onMessage);
@@ -200,32 +104,13 @@ function startInBrowser(
     context.signal?.removeEventListener("abort", onAbort);
   };
 
-  function onAbort() {
-    fail?.(new OAuthError("aborted", "Login was aborted."));
-    closePopup();
-  }
-
-  /**
-   * A handle severed by COOP answers `close()` with nothing at all, and may
-   * throw depending on the engine. The sign-in is over either way by the time
-   * this runs, so a window we cannot close is not a failure.
-   */
-  function closePopup() {
-    try {
-      if (popup && !popup.closed) {
-        popup.close();
-      }
-    } catch {
-      // Not a failed sign-in.
-    }
-  }
-
+  window.addEventListener("message", onMessage);
   context.signal?.addEventListener("abort", onAbort, { once: true });
 
   return {
     close() {
       cleanup();
-      closePopup();
+      closeQuietly(popup);
 
       return Promise.resolve();
     },
@@ -251,5 +136,25 @@ function startInBrowser(
     },
     redirectUri: options.redirectUri,
     wait: () => callback,
+  };
+}
+
+export function handshakePopupReceiver(
+  options: HandshakePopupOptions
+): CallbackReceiver {
+  return {
+    id: "handshake-popup",
+    start(context: ReceiverContext): Promise<StartedReceiver> {
+      if (typeof window === "undefined") {
+        return Promise.reject(
+          new OAuthError(
+            "unsupported_runtime",
+            "handshakePopupReceiver requires a browser window."
+          )
+        );
+      }
+
+      return Promise.resolve(startInBrowser(options, context));
+    },
   };
 }
