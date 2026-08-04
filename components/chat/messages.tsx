@@ -1,41 +1,30 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { ArrowDownIcon } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
-import { useMessages } from "@/hooks/use-messages";
-import type { Vote } from "@/lib/db/schema";
+import { useScrollToBottom } from "@/hooks/use-scroll-to-bottom";
 import type { ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { useDataStream } from "./data-stream-provider";
 import { Greeting } from "./greeting";
-import { PreviewMessage, ThinkingMessage } from "./message";
+import { PreviewMessage } from "./message";
+import { ThinkingMessage } from "./message-waiting";
 
 type MessagesProps = {
   addToolApprovalResponse: UseChatHelpers<ChatMessage>["addToolApprovalResponse"];
   chatId: string;
   status: UseChatHelpers<ChatMessage>["status"];
-  votes: Vote[] | undefined;
   messages: ChatMessage[];
-  setMessages: UseChatHelpers<ChatMessage>["setMessages"];
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
-  isReadonly: boolean;
-  isArtifactVisible: boolean;
   isLoading?: boolean;
-  selectedModelId: string;
   onEditMessage?: (message: ChatMessage) => void;
 };
 
-function PureMessages({
+export function Messages({
   addToolApprovalResponse,
   chatId,
   status,
-  votes,
   messages,
-  setMessages,
   regenerate,
-  isReadonly,
-  isArtifactVisible,
   isLoading,
-  selectedModelId: _selectedModelId,
   onEditMessage,
 }: MessagesProps) {
   const {
@@ -43,25 +32,25 @@ function PureMessages({
     endRef: messagesEndRef,
     isAtBottom,
     scrollToBottom,
-    hasSentMessage,
     reset,
-  } = useMessages({
-    status,
-  });
-
-  useDataStream();
+  } = useScrollToBottom();
 
   const prevChatIdRef = useRef(chatId);
+
   useEffect(() => {
-    if (prevChatIdRef.current !== chatId) {
-      prevChatIdRef.current = chatId;
-      reset();
+    if (prevChatIdRef.current === chatId) {
+      return;
     }
+
+    prevChatIdRef.current = chatId;
+    reset();
   }, [chatId, reset]);
 
   const handleScrollToBottom = useCallback(() => {
     scrollToBottom("smooth");
   }, [scrollToBottom]);
+
+  const lastIndex = messages.length - 1;
 
   return (
     <div className="relative flex-1 bg-background">
@@ -70,36 +59,23 @@ function PureMessages({
           <Greeting />
         </div>
       )}
+
       <div
         className={cn(
           "absolute inset-0 touch-pan-y overflow-y-auto",
           messages.length > 0 ? "bg-background" : "bg-transparent"
         )}
         ref={messagesContainerRef}
-        style={isArtifactVisible ? { scrollbarWidth: "none" } : undefined}
       >
         <div className="mx-auto flex min-h-full min-w-0 max-w-4xl flex-col gap-5 px-2 py-6 md:gap-7 md:px-4">
           {messages.map((message, index) => (
             <PreviewMessage
               addToolApprovalResponse={addToolApprovalResponse}
-              chatId={chatId}
-              isLoading={
-                status === "streaming" && messages.length - 1 === index
-              }
-              isReadonly={isReadonly}
+              isLoading={status === "streaming" && index === lastIndex}
               key={message.id}
               message={message}
               onEdit={onEditMessage}
               regenerate={regenerate}
-              requiresScrollPadding={
-                hasSentMessage && index === messages.length - 1
-              }
-              setMessages={setMessages}
-              vote={
-                votes
-                  ? votes.find((vote) => vote.messageId === message.id)
-                  : undefined
-              }
             />
           ))}
 
@@ -129,5 +105,3 @@ function PureMessages({
     </div>
   );
 }
-
-export const Messages = PureMessages;

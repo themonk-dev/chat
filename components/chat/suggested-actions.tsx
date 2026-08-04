@@ -2,27 +2,33 @@
 
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { motion } from "framer-motion";
-import { memo, useCallback } from "react";
+import { memo, useCallback, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { useProviderAuth } from "@/hooks/use-provider-auth";
 import { suggestions } from "@/lib/constants";
+import { registry } from "@/lib/oauth/registry";
 import type { ChatMessage } from "@/lib/types";
 import { Suggestion } from "../ai-elements/suggestion";
-import type { VisibilityType } from "./visibility-selector";
+import { AuthDialog } from "./auth-dialog";
+import { providerLogos } from "./provider-logos";
 
 type SuggestedActionsProps = {
   chatId: string;
   sendMessage: UseChatHelpers<ChatMessage>["sendMessage"];
-  selectedVisibilityType: VisibilityType;
 };
 
+/**
+ * While the selected provider is disconnected the canned prompts would be
+ * misleading — none of them can send — so this swaps them for a way to fix it.
+ */
 function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
+  const { activeId, isConnected } = useProviderAuth();
+  const [dialogOpen, setDialogOpen] = useState(false);
   const suggestedActions = suggestions;
+
   const handleSuggestionClick = useCallback(
     (suggestion: string) => {
-      window.history.pushState(
-        {},
-        "",
-        `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/chat/${chatId}`
-      );
+      window.history.pushState({}, "", `/chat/${chatId}`);
       sendMessage({
         parts: [{ text: suggestion, type: "text" }],
         role: "user",
@@ -30,6 +36,47 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
     },
     [chatId, sendMessage]
   );
+
+  const handleOpenDialog = useCallback(() => {
+    setDialogOpen(true);
+  }, []);
+
+  if (!isConnected) {
+    const { label } = registry[activeId];
+    const Logo = providerLogos[activeId];
+
+    return (
+      <>
+        <motion.div
+          animate={{ opacity: 1, y: 0 }}
+          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/50 bg-card/30 py-2 pr-2 pl-3"
+          data-testid="disconnected-notice"
+          exit={{ opacity: 0, y: 16 }}
+          initial={{ opacity: 0, y: 16 }}
+          transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <p className="flex items-center gap-2 text-[13px] text-foreground leading-relaxed">
+            {Logo ? <Logo className="size-4 shrink-0" /> : null}
+            Connect {label} to start chatting — your token never leaves this
+            browser tab.
+          </p>
+          <Button
+            className="rounded-lg"
+            data-testid="disconnected-notice-connect"
+            onClick={handleOpenDialog}
+            size="sm"
+          >
+            Authenticate
+          </Button>
+        </motion.div>
+        <AuthDialog
+          key={activeId}
+          onOpenChange={setDialogOpen}
+          open={dialogOpen}
+        />
+      </>
+    );
+  }
 
   return (
     <div
@@ -69,14 +116,5 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
 
 export const SuggestedActions = memo(
   PureSuggestedActions,
-  (prevProps, nextProps) => {
-    if (prevProps.chatId !== nextProps.chatId) {
-      return false;
-    }
-    if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
-      return false;
-    }
-
-    return true;
-  }
+  (prevProps, nextProps) => prevProps.chatId === nextProps.chatId
 );

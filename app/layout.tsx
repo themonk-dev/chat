@@ -4,12 +4,46 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 import "./globals.css";
-import { SessionProvider } from "next-auth/react";
+
+const SITE_NAME = "chat.themonk.dev";
+const SITE_URL = "https://chat.themonk.dev";
+const TITLE = "chat.themonk.dev — one chat, every AI subscription";
+const DESCRIPTION =
+  "Chat with ChatGPT, Claude, Gemini, Grok and more using the plans you already pay for. Switch provider mid-conversation. No API keys.";
+const TWITTER_DESCRIPTION =
+  "Use the AI plans you already pay for. Switch provider mid-conversation. No API keys.";
+const OG_IMAGE_ALT = "Every AI subscription you pay for. One chat window.";
+
+/**
+ * `/og.png` is a rewrite onto `app/og/route.tsx` (see next.config.ts), so a
+ * static `public/og.png` can take over later without touching these tags.
+ */
+const OG_IMAGE = {
+  alt: OG_IMAGE_ALT,
+  height: 630,
+  url: "/og.png",
+  width: 1200,
+};
 
 export const metadata: Metadata = {
-  description: "Next.js chatbot template using the AI SDK.",
-  metadataBase: new URL("https://chat.vercel.ai"),
-  title: "Next.js Chatbot Template",
+  alternates: { canonical: SITE_URL },
+  description: DESCRIPTION,
+  metadataBase: new URL(SITE_URL),
+  openGraph: {
+    description: DESCRIPTION,
+    images: [OG_IMAGE],
+    siteName: SITE_NAME,
+    title: TITLE,
+    type: "website",
+    url: SITE_URL,
+  },
+  title: TITLE,
+  twitter: {
+    card: "summary_large_image",
+    description: TWITTER_DESCRIPTION,
+    images: [OG_IMAGE],
+    title: TITLE,
+  },
 };
 
 export const viewport = {
@@ -34,15 +68,18 @@ const THEME_COLOR_SCRIPT = `\
 (function() {
   var html = document.documentElement;
   var meta = document.querySelector('meta[name="theme-color"]');
+
   if (!meta) {
     meta = document.createElement('meta');
     meta.setAttribute('name', 'theme-color');
     document.head.appendChild(meta);
   }
+
   function updateThemeColor() {
     var isDark = html.classList.contains('dark');
     meta.setAttribute('content', isDark ? '${DARK_THEME_COLOR}' : '${LIGHT_THEME_COLOR}');
   }
+
   var observer = new MutationObserver(updateThemeColor);
   observer.observe(html, { attributes: true, attributeFilter: ['class'] });
   updateThemeColor();
@@ -74,11 +111,7 @@ export default function RootLayout({
           disableTransitionOnChange
           enableSystem
         >
-          <SessionProvider
-            basePath={`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/auth`}
-          >
-            <TooltipProvider>{children}</TooltipProvider>
-          </SessionProvider>
+          <TooltipProvider>{children}</TooltipProvider>
         </ThemeProvider>
       </body>
     </html>

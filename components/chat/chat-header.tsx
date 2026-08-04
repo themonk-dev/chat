@@ -1,27 +1,21 @@
 "use client";
 
-import { PanelLeftIcon } from "lucide-react";
-import Link from "next/link";
+import { ExternalLinkIcon, GithubIcon, PanelLeftIcon } from "lucide-react";
 import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
-import { VercelIcon } from "./icons";
-import { VisibilitySelector, type VisibilityType } from "./visibility-selector";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { DeployButton } from "./deploy-button";
+import { ManageProviders } from "./manage-providers";
 
-function PureChatHeader({
-  chatId,
-  selectedVisibilityType,
-  isReadonly,
-}: {
-  chatId: string;
-  selectedVisibilityType: VisibilityType;
-  isReadonly: boolean;
-}) {
-  const { state, toggleSidebar, isMobile } = useSidebar();
+const REPOSITORY_URL = "https://github.com/themonk-dev/chat";
 
-  if (state === "collapsed" && !isMobile) {
-    return null;
-  }
+function PureChatHeader() {
+  const { toggleSidebar } = useSidebar();
 
   return (
     <header className="sticky top-0 flex h-14 items-center gap-2 bg-sidebar px-3">
@@ -34,43 +28,48 @@ function PureChatHeader({
         <PanelLeftIcon className="size-4" />
       </Button>
 
-      <Link
-        className="flex size-8 items-center justify-center rounded-lg md:hidden"
-        href="https://vercel.com/templates/next.js/chatbot"
-        rel="noopener noreferrer"
-        target="_blank"
-      >
-        <VercelIcon size={14} />
-      </Link>
+      <ManageProviders />
 
-      {!isReadonly && (
-        <VisibilitySelector
-          chatId={chatId}
-          selectedVisibilityType={selectedVisibilityType}
-        />
-      )}
-
-      <Button
-        asChild
-        className="hidden rounded-lg bg-foreground px-4 text-background hover:bg-foreground/90 md:ml-auto md:flex"
-      >
-        <Link
-          href="https://vercel.com/templates/next.js/chatbot"
+      <div className="ml-auto flex items-center gap-1.5">
+        <a
+          className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+          href="https://themonk.dev"
           rel="noopener noreferrer"
           target="_blank"
         >
-          <VercelIcon size={16} />
-          Deploy with Vercel
-        </Link>
-      </Button>
+          built by{" "}
+          <span className="inline-flex items-center gap-0.5 underline underline-offset-2">
+            themonk.dev
+            <ExternalLinkIcon className="size-3" />
+          </span>
+        </a>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              asChild
+              className="size-7 rounded-lg border-border/50 text-foreground shadow-none focus-visible:border-border/50 focus-visible:ring-0 active:translate-y-0"
+              size="icon-sm"
+              variant="outline"
+            >
+              <a
+                aria-label="Source on GitHub"
+                data-testid="repository-link"
+                href={REPOSITORY_URL}
+                rel="noopener noreferrer"
+                target="_blank"
+              >
+                <GithubIcon className="size-4" />
+              </a>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Source on GitHub</TooltipContent>
+        </Tooltip>
+
+        <DeployButton />
+      </div>
     </header>
   );
 }
 
-export const ChatHeader = memo(
-  PureChatHeader,
-  (prevProps, nextProps) =>
-    prevProps.chatId === nextProps.chatId &&
-    prevProps.selectedVisibilityType === nextProps.selectedVisibilityType &&
-    prevProps.isReadonly === nextProps.isReadonly
-);
+export const ChatHeader = memo(PureChatHeader);

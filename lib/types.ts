@@ -1,30 +1,51 @@
 import type { InferUITool, UIMessage } from "ai";
 import { z } from "zod";
-import type { ArtifactKind } from "@/components/chat/artifact";
-import type { createDocument } from "./ai/tools/create-document";
 import type { getWeather } from "./ai/tools/get-weather";
-import type { requestSuggestions } from "./ai/tools/request-suggestions";
-import type { updateDocument } from "./ai/tools/update-document";
-import type { Suggestion } from "./db/schema";
 
+/**
+ * One thread can hold a Claude reply followed by a Grok one, and nothing else
+ * in a stored message says which. The two ids travel as one object because a
+ * model id only means something alongside the provider it was sent to.
+ */
+export const messageAttributionSchema = z.object({
+  modelId: z.string(),
+  providerId: z.string(),
+});
+
+export type MessageAttribution = z.infer<typeof messageAttributionSchema>;
+
+/**
+ * Every field is optional by contract: this describes messages already in
+ * readers' `localStorage`, written before either field existed.
+ */
 export const messageMetadataSchema = z.object({
-  createdAt: z.string(),
+  attribution: messageAttributionSchema.optional(),
+  createdAt: z.string().optional(),
 });
 
 export type MessageMetadata = z.infer<typeof messageMetadataSchema>;
 
+/**
+ * Hand-written rather than `safeParse` because it runs per message per render,
+ * but it makes the same judgement: either both ids, or nothing.
+ */
+export function attributionOf(
+  message: { metadata?: MessageMetadata } | undefined
+): MessageAttribution | undefined {
+  const modelId = message?.metadata?.attribution?.modelId;
+  const providerId = message?.metadata?.attribution?.providerId;
+
+  if (typeof modelId !== "string" || typeof providerId !== "string") {
+    return;
+  }
+
+  return modelId && providerId ? { modelId, providerId } : undefined;
+}
+
 type weatherTool = InferUITool<typeof getWeather>;
-type createDocumentTool = InferUITool<ReturnType<typeof createDocument>>;
-type updateDocumentTool = InferUITool<ReturnType<typeof updateDocument>>;
-type requestSuggestionsTool = InferUITool<
-  ReturnType<typeof requestSuggestions>
->;
 
 export type ChatTools = {
   getWeather: weatherTool;
-  createDocument: createDocumentTool;
-  updateDocument: updateDocumentTool;
-  requestSuggestions: requestSuggestionsTool;
 };
 
 export type WaitingStatusData = {
@@ -34,19 +55,25 @@ export type WaitingStatusData = {
   modelName: string;
 };
 
+/**
+ * Carried on the transcript rather than in `useChat`'s transient `error`, so a
+ * failure survives the reload every other message survives. `retryOf` is what
+ * makes Retry work afterwards, with nothing remembered outside the thread.
+ */
+export type ChatErrorData = {
+  detail: string;
+  kind?: string;
+  modelId: string;
+  modelName: string;
+  providerId: string;
+  providerLabel: string;
+  retryOf?: string;
+};
+
 export type CustomUIDataTypes = {
-  textDelta: string;
-  imageDelta: string;
-  sheetDelta: string;
-  codeDelta: string;
-  suggestion: Suggestion;
   appendMessage: string;
-  id: string;
-  title: string;
-  kind: ArtifactKind;
-  clear: null;
-  finish: null;
   "chat-title": string;
+  error: ChatErrorData;
   "waiting-status": WaitingStatusData;
 };
 
