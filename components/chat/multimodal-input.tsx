@@ -730,11 +730,46 @@ function PureModelSelectorCompact({
    */
   const selectedProviderId = getSelectionProviderId();
 
+  /**
+   * The name to show for the model that is actually selected.
+   *
+   * Resolved against three lists, in order, and the order is the fix for a
+   * flake that read as "some loads show 'Select a model' despite a valid
+   * token and a 200 models response".
+   *
+   * It used to be resolved against the live listing alone, which is the one
+   * list that can legitimately *not* contain the selection. Only `activeId`
+   * is persisted across a load — `currentModelId` is not — so
+   * `use-active-chat` re-derives the selection from `defaultModelFor`, a
+   * pinned id out of the static catalogue in `lib/oauth/models.ts`. Meanwhile
+   * `useModelGroups` *replaces* that catalogue with `fetched[id]` the moment
+   * the provider answers, and a provider whose live ids differ from the
+   * pinned ones — Claude answers `claude-sonnet-4-5` where the catalogue
+   * pins `claude-sonnet-4-5-20250929` — no longer carries the selected id.
+   * So the successful response was what blanked the label, and picking any
+   * model by hand fixed it for the life of that tab, which is what made it
+   * look like a hydration race.
+   *
+   * Every step stays keyed on `selectedProviderId`, the owner
+   * `getSelectionProviderId()` reports, so this cannot start naming another
+   * provider's model — the mismatch this component is careful about
+   * elsewhere. The last step is the id itself: the reader is genuinely on
+   * that model, and the send gate agrees and always did (it asks
+   * `resolveRequest`, never the listing), so showing the id is honest where
+   * "Select a model" is not. That phrase now means only what it says —
+   * that there is no selection.
+   */
   const selectedModel = selectedProviderId
-    ? (
+    ? ((
         groups.find((group) => group.providerId === selectedProviderId)
           ?.models ?? []
-      ).find((model) => model.id === selectedModelId)
+      ).find((model) => model.id === selectedModelId) ??
+      modelsFor(selectedProviderId).find(
+        (model) => model.id === selectedModelId
+      ) ??
+      (selectedModelId
+        ? { id: selectedModelId, name: selectedModelId }
+        : undefined))
     : undefined;
 
   const handleSelect = useCallback(

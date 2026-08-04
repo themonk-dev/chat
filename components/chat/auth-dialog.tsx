@@ -83,6 +83,30 @@ function errorMessage(error: unknown): string {
         : "The provider had trouble completing this request. Try again.";
     }
 
+    /**
+     * The second templated code, for the same reason as the first: the SDK
+     * builds this message by naming `provider.tokenUrl`, which for this app
+     * is the proxy route (`/api/token/claude`) rather than anything a reader
+     * has heard of, and then appends whatever the provider said.
+     *
+     * `429` gets its own sentence because it is the one the owner spent
+     * hours on, and because the provider's own advice for it is actively
+     * wrong. Claude's token endpoint answers `429 Rate limited. Please try
+     * again later.` — verified live, on a single cold, well-formed request
+     * carrying a code it did not like — so this is what a *rejected* code
+     * looks like there, and "try again" immediately is what keeps the limit
+     * hot. Say to wait, and say why.
+     */
+    if (error.code === "token_request_failed") {
+      if (error.status === 429) {
+        return "The provider is rate-limiting this code exchange. Wait a minute before trying again — repeated attempts keep the limit in place, and each one needs a fresh code.";
+      }
+
+      return error.status
+        ? `The provider rejected this code (HTTP ${error.status}). Click Retry, then use the code from the tab that opens.`
+        : "The provider rejected this code. Click Retry, then use the code from the tab that opens.";
+    }
+
     return unsafeToDisplay(error.message)
       ? "Something went wrong. Please try again."
       : error.message;
@@ -132,6 +156,19 @@ export function AuthDialog({
 
   const attemptRef = useRef(0);
   const deviceStartedRef = useRef(false);
+
+  /**
+   * Whether the paste flow has a tab open that the reader is meant to be
+   * pasting from.
+   *
+   * `pending` is exactly that fact and no other: `connect()` parks it when
+   * `manualReceiver`'s `prompt` fires — which is after the authorization URL
+   * exists and the tab has been opened — and `runAttempt`'s `finally` clears
+   * it when the attempt ends, which is also when the hook retires the
+   * attempt and closes the tab. So the two have the same lifetime, and this
+   * needs no state of its own to fall out of sync with.
+   */
+  const pasteTabOpen = pending?.kind === "paste";
 
   /**
    * The provider window this dialog opened, so it can be closed again once
@@ -515,8 +552,13 @@ export function AuthDialog({
 
         {flow === "paste" ? (
           <div className="flex flex-col gap-3">
-            <Button disabled={busy} onClick={handleOpenPaste} variant="outline">
-              Open {label}
+            <Button
+              data-testid="auth-dialog-open"
+              disabled={busy}
+              onClick={handleOpenPaste}
+              variant="outline"
+            >
+              {pasteTabOpen ? `Reopen ${label}` : `Open ${label}`}
               <ExternalLinkIcon aria-hidden="true" className="size-4" />
             </Button>
             {pasteHint ? (
@@ -530,6 +572,19 @@ export function AuthDialog({
               placeholder="Paste the code or URL here"
               value={code}
             />
+            {/*
+              Which tab the input belongs to, said out loud. The reader
+              typically has an older callback tab open from a previous
+              attempt, and nothing on screen distinguished the two — a code
+              from the wrong one is refused by `submitCode`, but not being
+              told which tab to use is how they got there.
+            */}
+            {pasteTabOpen ? (
+              <DialogDescription data-testid="auth-dialog-paste-scope">
+                Use the code from the {label} tab this dialog just opened — one
+                from an earlier tab will not be accepted.
+              </DialogDescription>
+            ) : null}
             <Button
               data-testid="auth-dialog-submit"
               disabled={busy || !code.trim()}
