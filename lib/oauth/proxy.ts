@@ -24,6 +24,8 @@ export async function forward(
     headers.delete(name);
   }
 
+  headers.set("user-agent", PROXY_USER_AGENT);
+
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
   const body = hasBody
     ? await withClientSecret(request, target, headers)
@@ -128,11 +130,36 @@ function secretFor(target: URL): string | undefined {
   }
 }
 
+/**
+ * Sent in place of the reader's browser UA.
+ *
+ * Anthropic's token endpoint refuses a well-formed authorization-code exchange
+ * that carries a browser-like `User-Agent`, and dresses the refusal as
+ * `429 rate_limit_error` — which reads as throttling and is not. Measured
+ * through this proxy, same route and body seconds apart, only the UA differing:
+ * a Chrome UA answers 429 with no `request-id` and no `anthropic-ratelimit-*`
+ * headers (a Cloudflare edge block), while `axios/1.13.1` reaches real grant
+ * validation and answers `400 invalid_grant`.
+ *
+ * The strip list below already removed every other "a browser sent this"
+ * signal — `origin`, `referer`, `sec-fetch-*`, `sec-ch-ua*` — and left the
+ * loudest one in place. Setting a value rather than only deleting it keeps this
+ * off whatever default the runtime would otherwise supply.
+ */
+const PROXY_USER_AGENT =
+  "ai-oauth-sdk-playground/1.0 (+https://ai-oauth.themonk.dev)";
+
 const STRIPPED_REQUEST_HEADERS = [
   "origin",
   "referer",
   "cookie",
   "host",
+  /*
+   * Replaced, not merely dropped — see PROXY_USER_AGENT. Deleting it alone
+   * would leave the runtime's own default, which is not something this file
+   * should be at the mercy of.
+   */
+  "user-agent",
   "connection",
   "keep-alive",
   "transfer-encoding",
