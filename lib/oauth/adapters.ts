@@ -1,17 +1,15 @@
-import {
-  normalizeCodexResponsesBody,
-  type ResolvedCredential,
-  type TokenSet,
-} from "@ai-oauth-sdk/core";
+import { normalizeCodexResponsesBody, type TokenSet } from "@ai-oauth-sdk/core";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
+import { copilotCredentialFor } from "./copilot";
 import { wrapCodeAssist } from "./gemini-envelope";
 import { resolveGeminiProject } from "./gemini-project";
 import { proxiedProviders } from "./providers";
+import { withSseTailFlush } from "./sse-tail";
 import { clientFor } from "./storage";
 
 /**
@@ -39,6 +37,12 @@ export const CLAUDE_SYSTEM =
  * project id is resolved first — an extra round trip (and, on a first
  * sign-in, an onboarding poll) that every other provider skips. `onStatus`
  * is only consulted on that path; the other six ignore it.
+ *
+ * Every one of the seven is given `withSseTailFlush` as its `fetch`. That is
+ * not per-provider tuning: the AI SDK's SSE parser has no flush, so a final
+ * event that arrives without a trailing blank line is dropped for *any*
+ * provider that sends one. Wiring it in seven times rather than once is the
+ * cost of `fetch` being the only seam the provider factories expose.
  */
 export async function modelFor(
   id: string,
@@ -50,12 +54,14 @@ export async function modelFor(
     return createOpenRouter({
       apiKey: accessToken,
       baseURL: "/api/upstream/openrouter",
+      fetch: withSseTailFlush(),
     }).chat(modelId);
   }
 
   if (id === "xai" || id === "qwen") {
     return createOpenAICompatible({
       baseURL: `/api/upstream/${id}`,
+      fetch: withSseTailFlush(),
       headers: { authorization: `Bearer ${accessToken}` },
       name: id,
     }).chatModel(modelId);
@@ -71,6 +77,7 @@ export async function modelFor(
     return createAnthropic({
       authToken: accessToken,
       baseURL: "/api/upstream/claude",
+      fetch: withSseTailFlush(),
       // Claude's own descriptor already knows what an OAuth-bearer request
       // needs (the API version, and the beta flag that opts into accepting
       // Authorization at all) — read off it rather than repeating it here.
@@ -84,7 +91,7 @@ export async function modelFor(
     return createOpenAI({
       apiKey: accessToken,
       baseURL: "/api/upstream/openai",
-      fetch: codexFetch(tokens),
+      fetch: codexFetch(tokens, withSseTailFlush()),
       // The descriptor's apiHeaders also supplies chatgpt-account-id when
       // the token names one — a subscription token has to name the account
       // it is billed against, and hardcoding just the other two headers
@@ -103,7 +110,12 @@ export async function modelFor(
       // it only exists to satisfy the SDK's own validation.
       apiKey: "unused",
       baseURL: "/api/upstream/gemini/v1internal",
-      fetch: wrapCodeAssist(project, modelId, withoutApiKeyHeader),
+      // Outermost, so it sees the stream `wrapCodeAssist` has already
+      // unwrapped — the terminator has to land on what the SDK's parser
+      // actually reads, not on the enveloped bytes underneath it.
+      fetch: withSseTailFlush(
+        wrapCodeAssist(project, modelId, withoutApiKeyHeader)
+      ),
       headers: { authorization: `Bearer ${accessToken}` },
     })(modelId);
   }
@@ -153,69 +165,6 @@ async function tokensFor(id: string, accessToken: string): Promise<TokenSet> {
   return { accessToken, provider: id, raw: {}, tokenType: "bearer" };
 }
 
-type CachedCopilotCredential = {
-  credential: ResolvedCredential;
-  expiresAt: number;
-};
-
-/** One exchange per `ghu_` token; see `copilotCredentialFor` for why. */
-const copilotCredentials = new Map<string, CachedCopilotCredential>();
-
-/** Renew this far ahead of the credential's real expiry, to absorb latency. */
-const COPILOT_EXPIRY_SKEW_MS = 60_000;
-
-/** A `ghu_` token GitHub never handed an expiry for is assumed valid this long. */
-const COPILOT_DEFAULT_TTL_MS = 25 * 60 * 1000;
-
-/**
- * The credential a `ghu_` GitHub token grants is not the one Copilot's API
- * accepts — that has to be exchanged for a short-lived Copilot token first,
- * which is what carries the descriptor's `Copilot-Integration-Id` header
- * alongside it. `exchangeCredential` does both and is read off the
- * descriptor rather than hardcoded, so a change to either lands here for
- * free.
- *
- * The exchange call itself goes straight to `api.github.com`, never through
- * our proxy, so the `ghu_` token travels only to GitHub — but that also
- * means it is the one round trip in this file with no proxy caching or
- * retry logic backing it up, so it is cached here rather than repeated on
- * every message: the resulting token is valid for roughly 25 minutes, and
- * re-exchanging on every turn would multiply both latency and rate-limit
- * exposure on the path we control least.
- */
-async function copilotCredentialFor(
-  accessToken: string
-): Promise<ResolvedCredential> {
-  const cached = copilotCredentials.get(accessToken);
-
-  if (cached && Date.now() < cached.expiresAt - COPILOT_EXPIRY_SKEW_MS) {
-    return cached.credential;
-  }
-
-  const provider = proxiedProviders["github-copilot"];
-  const tokens = {
-    accessToken,
-    provider: "github-copilot",
-    raw: {},
-    tokenType: "bearer",
-  } as TokenSet;
-
-  const credential = await provider.exchangeCredential?.(tokens, { fetch });
-
-  if (!credential) {
-    throw new Error(
-      "The github-copilot descriptor has no credential exchange."
-    );
-  }
-
-  copilotCredentials.set(accessToken, {
-    credential,
-    expiresAt: credential.expiresAt ?? Date.now() + COPILOT_DEFAULT_TTL_MS,
-  });
-
-  return credential;
-}
-
 async function copilotModel(
   modelId: string,
   accessToken: string
@@ -224,6 +173,7 @@ async function copilotModel(
 
   return createOpenAICompatible({
     baseURL: "/api/upstream/github-copilot",
+    fetch: withSseTailFlush(),
     headers: {
       authorization: `Bearer ${credential.accessToken}`,
       ...credential.headers,

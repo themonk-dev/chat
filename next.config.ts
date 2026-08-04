@@ -36,17 +36,16 @@ const nextConfig: NextConfig = {
     prefetchInlining: true,
     turbopackFileSystemCacheForDev: true,
   },
-  images: {
-    remotePatterns: [
-      {
-        hostname: "avatar.vercel.sh",
-      },
-      {
-        hostname: "*.public.blob.vercel-storage.com",
-        protocol: "https",
-      },
-    ],
-  },
+  /*
+   * There is deliberately no `images` block. Nothing in this app renders a
+   * remote image — `next/image` is not imported anywhere — but a
+   * `remotePatterns` allow-list keeps `/_next/image` willing to fetch,
+   * optimize and cache from every host it names. The inherited one named
+   * `*.public.blob.vercel-storage.com`, which is a wildcard over every Vercel
+   * Blob store on the internet rather than ours, so anyone could point the
+   * deployment's bandwidth at their own bucket. Add hosts back only alongside
+   * an actual `next/image` call site.
+   */
   logging: {
     fetches: {
       fullUrl: false,

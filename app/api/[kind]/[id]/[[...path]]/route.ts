@@ -1,4 +1,4 @@
-import { checkBotId } from "botid/server";
+import { isBotRequest } from "@/lib/oauth/bot-gate";
 import { forward } from "@/lib/oauth/proxy";
 import { resolveTarget, withQuery } from "@/lib/oauth/targets";
 
@@ -24,9 +24,10 @@ async function handler(
   request: Request,
   { params }: { params: Promise<RouteParams> }
 ) {
-  const verification = await checkBotId();
-
-  if (verification.isBot) {
+  // Bounded and fail-open — see `isBotRequest` for why a gate on a route that
+  // already requires the caller's own provider token does not take the
+  // deployment down with it when Vercel's bot-protection service is degraded.
+  if (await isBotRequest()) {
     return Response.json({ error: "blocked" }, { status: 403 });
   }
 

@@ -7,7 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * `AuthClient`/session storage.
  */
 const mockFetchCodexModels = vi.fn();
-vi.mock("@ai-oauth-sdk/browser", () => ({
+// Partial: the real descriptors are still needed, because `models.ts` reads
+// Claude's listing headers and Copilot's credential exchange off them rather
+// than hand-copying either.
+vi.mock("@ai-oauth-sdk/browser", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@ai-oauth-sdk/browser")>()),
   fetchCodexModels: (...args: unknown[]) => mockFetchCodexModels(...args),
 }));
 
@@ -17,6 +21,7 @@ vi.mock("@/lib/oauth/storage", () => ({
 }));
 
 import { defaultModelFor, fetchModelsFor, modelsFor } from "./models";
+import { proxiedProviders } from "./providers";
 
 describe("modelsFor / defaultModelFor", () => {
   it("returns the static catalogue for a known provider", () => {
@@ -159,19 +164,68 @@ describe("fetchModelsFor", () => {
     const models = await fetchModelsFor("qwen", "token");
     expect(models).toEqual(modelsFor("qwen"));
   });
+});
 
-  it("adds Copilot's required headers alongside the bearer token", async () => {
+/**
+ * Copilot's `/models` sits behind the same gate as its chat/completions: it
+ * wants the short-lived credential the `ghu_` GitHub token is exchanged for,
+ * not the `ghu_` token itself. Sending the raw one 401s, and `fetchModelsFor`
+ * swallows a 401 like any other failure — so the picker showed the two-entry
+ * static fallback forever while sending worked fine against models the user
+ * could not select. Nothing surfaced the failure, which is why these are
+ * assertions on the *token sent* rather than on the returned list.
+ */
+describe("fetchModelsFor: github-copilot", () => {
+  const originalFetch = global.fetch;
+  const originalExchange =
+    proxiedProviders["github-copilot"].exchangeCredential;
+
+  beforeEach(() => {
+    global.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    proxiedProviders["github-copilot"].exchangeCredential = originalExchange;
+  });
+
+  function headersSent(): Record<string, string> {
+    const [, init] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+
+    return init?.headers as Record<string, string>;
+  }
+
+  it("sends the exchanged credential, never the raw ghu_ token", async () => {
+    proxiedProviders["github-copilot"].exchangeCredential = vi.fn(() =>
+      Promise.resolve({
+        accessToken: "copilot-short-lived",
+        expiresAt: Date.now() + 10 * 60_000,
+        headers: { "Copilot-Integration-Id": "vscode-chat" },
+      })
+    );
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      json: () => Promise.resolve({ data: [] }),
+      json: () => Promise.resolve({ data: [{ id: "gpt-4.1" }] }),
       ok: true,
     });
 
-    await fetchModelsFor("github-copilot", "gh-token");
+    const models = await fetchModelsFor("github-copilot", "ghu_listing_token");
 
-    const [, init] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
-    const headers = init?.headers as Record<string, string>;
-    expect(headers.authorization).toBe("Bearer gh-token");
+    const headers = headersSent();
+    expect(headers.authorization).toBe("Bearer copilot-short-lived");
+    expect(headers.authorization).not.toContain("ghu_listing_token");
     expect(headers["Copilot-Integration-Id"]).toBe("vscode-chat");
+    expect(models).toEqual([{ id: "gpt-4.1", name: "Gpt 4.1" }]);
+  });
+
+  it("falls back to the static list when the exchange itself fails", async () => {
+    proxiedProviders["github-copilot"].exchangeCredential = vi.fn(() =>
+      Promise.reject(new Error("Copilot token exchange failed (HTTP 403)"))
+    );
+
+    const models = await fetchModelsFor("github-copilot", "ghu_no_sub");
+
+    expect(models).toEqual(modelsFor("github-copilot"));
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });
 

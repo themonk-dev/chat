@@ -26,7 +26,20 @@ export function wrapCodeAssist(
 
     const response = await inner(stripModelSegment(url), {
       ...init,
-      body: JSON.stringify({ model, project, request }),
+      /*
+       * `user_prompt_id` is a per-turn identifier gemini-cli sends on every
+       * Code Assist call, and the predecessor playground sent it too; the port
+       * dropped it. Whether Code Assist requires it, meters differently
+       * without it, or ignores it is not something this app can observe — but
+       * a fresh UUID costs nothing, and matching the client whose OAuth scope
+       * this token belongs to is the safer side of an unknown.
+       */
+      body: JSON.stringify({
+        model,
+        project,
+        request,
+        user_prompt_id: crypto.randomUUID(),
+      }),
     });
 
     const type = response.headers.get("content-type") ?? "";
@@ -142,7 +155,16 @@ function unwrapStream(
         buffer += decoder.decode();
 
         if (buffer) {
-          controller.enqueue(encoder.encode(rewriteLine(buffer)));
+          /*
+           * The trailing "\n" matters as much as flushing at all. `transform`
+           * re-appends it to every line it emits, because a line the source
+           * terminated must stay terminated; a tail flushed without one hands
+           * the SSE parser an unterminated line, which it holds and then drops
+           * when the stream ends. That is the same event lost twice — once
+           * here, once downstream. `withSseTailFlush` adds the blank line that
+           * turns this terminated line into a dispatched event.
+           */
+          controller.enqueue(encoder.encode(`${rewriteLine(buffer)}\n`));
         }
       },
       transform(chunk, controller) {

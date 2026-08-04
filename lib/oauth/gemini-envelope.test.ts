@@ -1,5 +1,8 @@
+import { parseJsonEventStream } from "ai";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { wrapCodeAssist } from "./gemini-envelope";
+import { withSseTailFlush } from "./sse-tail";
 
 /** Simulates a network response arriving as the given raw chunks, in order. */
 function sseResponse(chunks: string[]): Response {
@@ -61,11 +64,36 @@ describe("wrapCodeAssist", () => {
       method: "POST",
     });
 
-    expect(seen).toEqual({
+    expect(seen).toMatchObject({
       model: "gemini-2.5-pro",
       project: "proj-1",
       request: { contents: [] },
     });
+  });
+
+  it("sends a per-turn user_prompt_id, as gemini-cli and the predecessor did", async () => {
+    // Dropped in the port. Restored because the token in play is scoped to
+    // gemini-cli's client, and looking like that client on a surface Google
+    // does not document is the safer side of an unknown.
+    const seen: string[] = [];
+    const inner: typeof fetch = (_url, init) => {
+      seen.push(JSON.parse(String(init?.body)).user_prompt_id);
+      return Promise.resolve(new Response("{}"));
+    };
+    const send = () =>
+      wrapCodeAssist(
+        "p",
+        "m",
+        inner
+      )("https://x.test", { body: "{}", method: "POST" });
+
+    await send();
+    await send();
+
+    expect(seen[0]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    );
+    expect(seen[0]).not.toBe(seen[1]);
   });
 
   it("unwraps the response envelope", async () => {
@@ -174,6 +202,11 @@ describe("wrapCodeAssist", () => {
     it("flushes a trailing event that never receives a closing newline", async () => {
       // The stream just ends mid-event — no more chunks, no trailing "\n" —
       // which is what a `flush()`-less transform drops on the floor.
+      //
+      // The "\n" the flush re-appends is load-bearing and was missing: every
+      // line `transform` emits carries its terminator, and a tail emitted
+      // without one is a line the SSE parser holds and then discards when the
+      // source closes. Gemini lost the same event twice, here and downstream.
       const inner: typeof fetch = () =>
         Promise.resolve(
           sseResponse([
@@ -189,8 +222,46 @@ describe("wrapCodeAssist", () => {
       )("https://x.test", { body: "{}", method: "POST" });
 
       expect(await readAll(response)).toBe(
-        'data: {"candidates":[{"text":"tail"}]}'
+        'data: {"candidates":[{"text":"tail"}]}\n'
       );
+    });
+
+    it("reaches the SSE parser as a real event once the tail flush is layered on", async () => {
+      // Both halves of Finding 5 in one assertion, in the order adapters.ts
+      // composes them: unwrap the envelope (terminating the tail line), then
+      // add the blank line the parser needs to dispatch it. Either fix alone
+      // still renders an empty bubble.
+      const inner: typeof fetch = () =>
+        Promise.resolve(
+          sseResponse(['data: {"response":{"candidates":[{"text":"tail"}]}}'])
+        );
+
+      const response = await withSseTailFlush(wrapCodeAssist("p", "m", inner))(
+        "https://x.test",
+        { body: "{}", method: "POST" }
+      );
+
+      // `parseJsonEventStream` is the AI SDK's own SSE entry point — the one
+      // every provider's `doStream` hands its body to — so this asks the real
+      // consumer whether the event survived, not a stand-in.
+      const reader = parseJsonEventStream({
+        schema: z.unknown(),
+        stream: response.body as ReadableStream<Uint8Array>,
+      }).getReader();
+      const events: unknown[] = [];
+
+      for (;;) {
+        // biome-ignore lint/performance/noAwaitInLoops: draining a reader is inherently sequential — each read depends on the last one's result
+        const { done, value } = await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        events.push(value.success ? value.value : "PARSE_FAILED");
+      }
+
+      expect(events).toEqual([{ candidates: [{ text: "tail" }] }]);
     });
 
     it("passes a [DONE] sentinel through untouched, even split across chunks", async () => {

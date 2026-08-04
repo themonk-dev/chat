@@ -66,8 +66,8 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
         >
           <p className="flex items-center gap-2 text-[13px] text-foreground leading-relaxed">
             {Logo ? <Logo className="size-4 shrink-0" /> : null}
-            Connect {label} to start chatting — nothing you send will go
-            anywhere until you do.
+            Connect {label} to start chatting — until you do, Send stays
+            disabled and no request is made.
           </p>
           <Button
             className="rounded-lg"
