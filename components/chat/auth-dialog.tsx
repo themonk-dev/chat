@@ -29,7 +29,12 @@ import { currentOrigin, flowFor, registry } from "@/lib/oauth/registry";
 import { CopyIcon } from "./icons";
 import { providerLogos } from "./provider-logos";
 
-export const PRIVACY_LINE =
+/**
+ * Said in full here, where the reader is about to hand over a credential and
+ * the detail is worth the words. The empty-state card says the short version
+ * inline instead of repeating this underneath itself.
+ */
+const PRIVACY_LINE =
   "Your token stays in this tab. It is never sent to our servers, and it is gone when you close this tab.";
 
 /** A message this long, or one that looks like markup, is not fit to show. */
