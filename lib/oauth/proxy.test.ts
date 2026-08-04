@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { forward, uncacheable } from "./proxy";
+import { PROXY_USER_AGENT } from "./proxy-headers";
 
 /**
  * Claude's token endpoint refuses a well-formed authorization-code exchange
@@ -56,7 +57,7 @@ describe("proxy request headers", () => {
       new URL("https://platform.claude.com/v1/oauth/token")
     );
 
-    expect(sent(fetchMock).get("user-agent")).toContain("ai-oauth-sdk");
+    expect(sent(fetchMock).get("user-agent")).toBe(PROXY_USER_AGENT);
   });
 
   it("still drops the other browser signals it always dropped", async () => {

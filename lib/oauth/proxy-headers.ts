@@ -3,8 +3,7 @@
  * the refusal as `429 rate_limit_error`. Set rather than only deleted, so this
  * does not fall back to whatever the runtime would send.
  */
-export const PROXY_USER_AGENT =
-  "ai-oauth-sdk-playground/1.0 (+https://ai-oauth.themonk.dev)";
+export const PROXY_USER_AGENT = "themonk-chat/1.0 (+https://chat.themonk.dev)";
 
 /**
  * Browser-only and hop-by-hop headers. They describe a cross-origin request
