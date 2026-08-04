@@ -1,4 +1,5 @@
 import type { ResolvedCredential, TokenSet } from "@ai-oauth-sdk/core";
+import { assertBrowser } from "./browser-only";
 import { proxiedProviders } from "./providers";
 
 type CachedCopilotCredential = {
@@ -36,10 +37,22 @@ const COPILOT_DEFAULT_TTL_MS = 25 * 60 * 1000;
  * the *same* cache, and `models.ts` importing `adapters.ts` would drag every
  * `@ai-sdk/*` provider package into the model picker's path for two headers
  * and a token.
+ *
+ * Browser-only, and asserted rather than assumed. Keying the cache by the
+ * `ghu_` token is a genuine read guard — a second reader cannot pull the
+ * first's entry without already holding their token — but it says nothing at
+ * all about where the entries live. Run on the server this becomes an
+ * unbounded, process-wide store of exchanged Copilot credentials held for the
+ * life of the lambda, which is what this app tells its readers does not exist.
+ * What kept it client-only was a guard in a neighbouring file (`upstreamBase`
+ * in `adapters.ts` throws off-browser) and a root-relative fetch URL that
+ * cannot resolve on a server. Neither is in this file, and neither is checked.
  */
 export async function copilotCredentialFor(
   accessToken: string
 ): Promise<ResolvedCredential> {
+  assertBrowser("The Copilot credential exchange");
+
   const cached = copilotCredentials.get(accessToken);
 
   if (cached && Date.now() < cached.expiresAt - COPILOT_EXPIRY_SKEW_MS) {

@@ -1,10 +1,13 @@
-import type { AuthClient } from "@ai-oauth-sdk/browser";
+import type { AuthClient, AuthStorage } from "@ai-oauth-sdk/browser";
 import {
   createBrowserAuthClient,
   publicClientIds,
   sessionStorageAdapter,
 } from "@ai-oauth-sdk/browser";
+import { assertBrowser } from "./browser-only";
 import { proxiedProviders } from "./providers";
+
+let storage: AuthStorage | undefined;
 
 /**
  * Tokens live in `sessionStorage`: they survive a reload, they are gone when the
@@ -17,8 +20,23 @@ import { proxiedProviders } from "./providers";
  *
  * One storage instance across all providers: the SDK namespaces its keys by
  * provider id, so several can be connected at once without collision.
+ *
+ * Built on first use rather than at module scope, and behind `assertBrowser`.
+ * `sessionStorageAdapter()` answers a missing `sessionStorage` with an
+ * in-memory `Map` instead of an error, so evaluating this line on the server —
+ * which SSR does, since this module is imported by `"use client"` code — used
+ * to put a process-wide token store in the deployed lambda. It was empty only
+ * because every caller happened to be inside an effect. Now the server has no
+ * store to fill: nothing is constructed until someone asks, and on the server
+ * nobody can.
  */
-const storage = sessionStorageAdapter();
+function tokenStorage(): AuthStorage {
+  assertBrowser("The provider token store");
+
+  storage ??= sessionStorageAdapter();
+
+  return storage;
+}
 
 /**
  * The CLI client ids each vendor has published, keyed the same way the
@@ -35,7 +53,18 @@ const knownClientIds = publicClientIds as Record<string, string>;
 
 const clients = new Map<string, AuthClient>();
 
+/**
+ * The memoized `AuthClient` for a provider.
+ *
+ * Guarded before the memo is even consulted, not merely before the storage is
+ * built: `clients` is module scope too, so a server-side hit would be one
+ * reader handed another's client. The check is first so that the error names
+ * the real problem — a caller on the server — rather than whatever the next
+ * line would have complained about.
+ */
 export function clientFor(id: string): AuthClient {
+  assertBrowser("The provider auth client");
+
   const existing = clients.get(id);
 
   if (existing) {
@@ -51,11 +80,9 @@ export function clientFor(id: string): AuthClient {
   const client = createBrowserAuthClient({
     clientId: knownClientIds[id],
     provider,
-    storage,
+    storage: tokenStorage(),
   });
   clients.set(id, client);
 
   return client;
 }
-
-export { storage as tokenStorage };

@@ -13,6 +13,10 @@ import { publicClientSecrets } from "@ai-oauth-sdk/core";
  *
  * The `Authorization` header is forwarded untouched and never read. That is the
  * whole point of this file.
+ *
+ * On the way back, every response — proxied, errored or substituted — is
+ * stamped `private, no-store` and stripped of the upstream's cache directives.
+ * See PRIVATE_CACHE_CONTROL.
  */
 export async function forward(
   request: Request,
@@ -45,23 +49,39 @@ export async function forward(
     out.delete(name);
   }
 
-  const blocked = blockNotice(upstream, target);
-
-  if (blocked) {
-    return blocked;
-  }
-
   /*
    * `upstream.body` is handed back untouched rather than buffered. Every
    * provider answers a chat with server-sent events, and reading the body to
    * completion here would hold the whole reply until the last token before the
    * page saw the first.
    */
-  return new Response(upstream.body, {
-    headers: out,
-    status: upstream.status,
-    statusText: upstream.statusText,
-  });
+  return uncacheable(
+    blockNotice(upstream, target) ??
+      new Response(upstream.body, {
+        headers: out,
+        status: upstream.status,
+        statusText: upstream.statusText,
+      })
+  );
+}
+
+/**
+ * Marks a response as the answer to one caller and nobody else.
+ *
+ * Exported because the route handler answers two requests without reaching
+ * `forward()` at all — a bot-gate refusal and an unknown route — and "every
+ * response from this proxy is uncacheable" is a weaker claim if it has to be
+ * read as "every response except those two". The 403 in particular is a
+ * per-caller verdict, and a 404 is cacheable by heuristic under RFC 9111 even
+ * with no cache directive on it.
+ *
+ * Mutates and returns the same response rather than rebuilding one: the body
+ * may be a live upstream stream, and copying it would mean reading it.
+ */
+export function uncacheable(response: Response): Response {
+  response.headers.set("cache-control", PRIVATE_CACHE_CONTROL);
+
+  return response;
 }
 
 /**
@@ -179,11 +199,52 @@ const STRIPPED_REQUEST_HEADERS = [
   "accept-encoding",
 ];
 
+/**
+ * Sent on every response this proxy produces, whatever the upstream asked for.
+ *
+ * Each response here is the answer to exactly one caller's credentialed
+ * request, and none of it is shared. Vercel's Edge Network keys a cached
+ * function response on URL and method alone — no notion of who asked — so an
+ * upstream's `cache-control: public, max-age=300` forwarded verbatim is enough
+ * to have one reader's `/api/upstream/openrouter/models` served to every other
+ * reader for the next five minutes, without a token of their own and without
+ * the bot gate running at all. The strip list below already removes
+ * `set-cookie`, which is the one header that would otherwise have suppressed
+ * that.
+ *
+ * `no-store` rather than `no-cache`: the latter permits storing and only
+ * requires revalidation, and a revalidation carries the *second* reader's
+ * (absent) credentials. `private` in front of it is redundant per RFC 9111 —
+ * nothing may be stored, so there is no store to scope — but it is the older
+ * and more widely implemented of the two directives, and an intermediary that
+ * understands only one of them should understand this one.
+ *
+ * **No `Vary` is set, deliberately.** `Vary` describes how to key an entry a
+ * cache is allowed to hold; `no-store` says there is no entry. Adding
+ * `Vary: Authorization` would only matter to a cache that stored the response
+ * in defiance of `no-store`, which is not a cache that can be reasoned about —
+ * and it would state the opposite of what this file means, implying these
+ * responses are cacheable when correctly keyed. They are not: the proxy also
+ * carries credentials that are not in `Authorization` at all (a token exchange
+ * puts them in the form body), so a header-keyed cache entry would be wrong
+ * even where it was honoured.
+ */
+const PRIVATE_CACHE_CONTROL = "private, no-store";
+
 /*
  * `content-encoding` and `content-length` describe the body as it arrived on
  * the wire, and `upstream.body` has already been decoded by the time it reaches
  * us. Passing them on tells the browser to decompress plaintext, which fails —
  * a JSON error surfaces as binary garbage, and an SSE stream never parses.
+ *
+ * The cache directives below are removed rather than left to be overridden.
+ * `cache-control` is rewritten anyway, but Vercel's CDN reads
+ * `vercel-cdn-cache-control` and then `cdn-cache-control` *in preference to*
+ * it, and Fastly reads `surrogate-control` the same way — so an upstream that
+ * sent one of those would keep its own caching policy through a rewrite that
+ * only touched `cache-control`. `expires`, `pragma` and `age` cannot outrank
+ * `no-store`, and go for coherence rather than for safety: a response that
+ * says it must not be stored should not also carry an age and an expiry.
  */
 const STRIPPED_RESPONSE_HEADERS = [
   "set-cookie",
@@ -192,4 +253,11 @@ const STRIPPED_RESPONSE_HEADERS = [
   "keep-alive",
   "content-encoding",
   "content-length",
+  "cache-control",
+  "cdn-cache-control",
+  "vercel-cdn-cache-control",
+  "surrogate-control",
+  "expires",
+  "pragma",
+  "age",
 ];

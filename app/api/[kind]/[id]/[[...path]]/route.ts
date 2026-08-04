@@ -1,5 +1,5 @@
 import { isBotRequest } from "@/lib/oauth/bot-gate";
-import { forward } from "@/lib/oauth/proxy";
+import { forward, uncacheable } from "@/lib/oauth/proxy";
 import { resolveTarget, withQuery } from "@/lib/oauth/targets";
 
 /**
@@ -34,14 +34,16 @@ async function handler(
   // already requires the caller's own provider token does not take the
   // deployment down with it when Vercel's bot-protection service is degraded.
   if (await isBotRequest()) {
-    return Response.json({ error: "blocked" }, { status: 403 });
+    return uncacheable(Response.json({ error: "blocked" }, { status: 403 }));
   }
 
   const { id, kind, path = [] } = await params;
   const target = resolveTarget(kind, id, path);
 
   if (!target) {
-    return Response.json({ error: "unknown_route" }, { status: 404 });
+    return uncacheable(
+      Response.json({ error: "unknown_route" }, { status: 404 })
+    );
   }
 
   return forward(request, withQuery(target, new URL(request.url)));
