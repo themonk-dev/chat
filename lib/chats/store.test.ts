@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deleteChat,
+  getChatsSnapshot,
   listChats,
   readChat,
   renameChat,
+  subscribeToChats,
   writeChat,
 } from "./store";
 
@@ -70,5 +72,85 @@ describe("chat store", () => {
     ).not.toThrow();
 
     setItemSpy.mockRestore();
+  });
+});
+
+/*
+ * The sidebar showed a new chat only after a reload: every reader held its own
+ * copy of a list taken before the save, and `localStorage` fires no event for a
+ * write from the same document. These pin the announcement that fixed it.
+ */
+describe("chat store subscriptions", () => {
+  beforeEach(() => {
+    globalThis.localStorage.clear();
+    // Drain the cache left by other tests in this file.
+    getChatsSnapshot();
+  });
+
+  it("tells subscribers when a chat is written", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeToChats(listener);
+
+    writeChat({
+      id: "new",
+      messages: [message("first")],
+      title: "Fresh",
+      updatedAt: 1,
+    });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it("hands back a new snapshot after a write and the same one before", () => {
+    const before = getChatsSnapshot();
+
+    expect(getChatsSnapshot()).toBe(before);
+
+    writeChat({
+      id: "next",
+      messages: [message("second")],
+      title: "Later",
+      updatedAt: 2,
+    });
+
+    const after = getChatsSnapshot();
+
+    // Identity must change, or useSyncExternalStore never re-renders.
+    expect(after).not.toBe(before);
+    expect(after.map((chat) => chat.id)).toContain("next");
+  });
+
+  it("stops calling a listener once it unsubscribes", () => {
+    const listener = vi.fn();
+
+    subscribeToChats(listener)();
+    writeChat({
+      id: "ignored",
+      messages: [message("third")],
+      title: "Gone",
+      updatedAt: 3,
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("notices a delete as well as a write", () => {
+    writeChat({
+      id: "doomed",
+      messages: [message("fourth")],
+      title: "Doomed",
+      updatedAt: 4,
+    });
+
+    const before = getChatsSnapshot();
+    const listener = vi.fn();
+    const unsubscribe = subscribeToChats(listener);
+
+    deleteChat("doomed");
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(getChatsSnapshot()).not.toBe(before);
+    unsubscribe();
   });
 });

@@ -18,6 +18,43 @@ export type StoredChat = {
  */
 const KEY = "ai-oauth-chat:index";
 
+/*
+ * `localStorage` fires no event for writes from the same document, so readers
+ * cannot learn about a save on their own. The store therefore announces its own
+ * writes, and it does so from `write` rather than from each mutation — one
+ * place, which a new mutation cannot forget to call.
+ *
+ * The snapshot is a cached array rather than a counter. `useSyncExternalStore`
+ * compares snapshots by identity, so it must be the *same* array until storage
+ * actually moves — building a fresh one per call would re-render forever.
+ */
+const listeners = new Set<() => void>();
+let cached: StoredChat[] | undefined;
+
+/** One frozen empty list, so the server snapshot is identity-stable too. */
+const EMPTY: StoredChat[] = [];
+
+export function subscribeToChats(listener: () => void): () => void {
+  listeners.add(listener);
+
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+export function getChatsSnapshot(): StoredChat[] {
+  if (!cached) {
+    cached = listChats();
+  }
+
+  return cached;
+}
+
+/** There is no storage during the server render, and nothing to describe. */
+export function getServerChatsSnapshot(): StoredChat[] {
+  return EMPTY;
+}
+
 export function listChats(): StoredChat[] {
   return [...read().values()].sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -85,6 +122,11 @@ function write(chats: Map<string, StoredChat>): void {
 
   try {
     localStorage.setItem(KEY, JSON.stringify([...chats.values()]));
+    cached = undefined;
+
+    for (const listener of listeners) {
+      listener();
+    }
   } catch {
     /*
      * Quota exhausted, or storage disabled by the browser. The conversation on
