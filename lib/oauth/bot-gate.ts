@@ -8,6 +8,13 @@ import { checkBotId } from "botid/server";
  * streamed round trip to the provider. Two seconds is generous for a verdict
  * that normally lands in tens of milliseconds, and it caps what a degraded
  * bot-protection service can add to a chat turn.
+ *
+ * What it bounds is the *waiting*, not the request. `checkBotId()` takes no
+ * abort signal, so a call this race abandons still holds an open socket to
+ * `api.vercel.com` until it finishes on its own. Under a degraded service
+ * that means latency stays bounded while concurrent connections do not —
+ * which is the right trade for a route whose alternative is refusing
+ * traffic, but it is a real cost and not a free timeout.
  */
 const BOT_CHECK_TIMEOUT_MS = 2000;
 
@@ -21,14 +28,25 @@ const BOT_CHECK_TIMEOUT_MS = 2000;
  *
  * It does not here, for three reasons specific to this route:
  *
- * 1. **BotID is not the security boundary.** Every request through this proxy
- *    already carries the caller's own provider credential — an OAuth token
- *    they signed in for, spending their own quota against their own account.
- *    There is nothing behind this route that an anonymous bot can reach by
- *    getting past the gate; `resolveTarget` bounds the hosts, and the upstream
- *    bounds the authorisation. BotID is abuse *dampening* (it keeps casual
- *    scripted traffic off the deployment's bandwidth), not the thing that
- *    keeps anything safe. Trading availability for it is a bad exchange.
+ * 1. **BotID is not the security boundary.** Nothing behind this route is
+ *    reachable by getting past the gate. `resolveTarget` bounds the hosts to
+ *    the ones the SDK ships, and every endpoint behind it bounds its own
+ *    authorisation:
+ *
+ *    - `/api/upstream/*`, `/api/userinfo/*` and `/api/revoke/*` carry the
+ *      caller's own provider credential — an OAuth token they signed in for,
+ *      spending their own quota against their own account. Without one the
+ *      upstream answers 401.
+ *    - `/api/token/*` and `/api/device/*` deliberately carry *no* credential;
+ *      they are how one is obtained. What bounds them is the exchange itself:
+ *      a token request without a valid PKCE verifier, or a poll without a
+ *      device code the provider issued, gets nothing back. An attacker who
+ *      gets past BotID here reaches an endpoint that will not mint them
+ *      anything.
+ *
+ *    So BotID is abuse *dampening* — it keeps casual scripted traffic off the
+ *    deployment's bandwidth — not the thing that keeps anything safe. Trading
+ *    availability for it is a bad exchange.
  *
  * 2. **Failing closed here breaks sign-in, not just sending.** The same
  *    handler serves `/api/token/*`. A `checkBotId()` that throws — which it

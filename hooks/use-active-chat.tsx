@@ -159,18 +159,20 @@ function withConnections(
 
 /**
  * Which providers currently hold a token, independent of which one is
- * active — the same problem `components/chat/provider-selector.tsx` solves
- * for its connection dots, via a similar two-part answer: the *active*
- * provider's entry is kept current reactively (see the first effect below
- * for why that re-reads storage itself rather than trusting
- * `useProviderAuth`'s `tokens` directly); everything else is invisible to
- * it and has to be read from storage directly.
+ * active — the question `useProviderAuth` cannot answer, since its `tokens`
+ * are scoped to `activeId` by construction.
  *
- * That file only does the storage read while its menu is open, since
- * nothing needs the full set before then. Here, both callers (the picker's
- * trigger, and the recovery effect below) need an answer before anything is
- * ever opened, so the full read happens once on mount instead, then is kept
- * current by the reactive half above.
+ * The answer comes in two parts. The *active* provider's entry is kept
+ * current reactively (see the first effect below for why that re-reads
+ * storage itself rather than trusting `useProviderAuth`'s `tokens`
+ * directly); every other provider is invisible to that effect and is read
+ * from storage in the full sweep beneath it — on mount, and again whenever
+ * `notifyConnectionsChanged` says storage moved.
+ *
+ * The sweep runs on mount rather than lazily, because every caller needs an
+ * answer before any menu is ever opened: the model picker's trigger, the
+ * recovery effect below, and the composer's send gate all ask this before
+ * the reader has touched anything.
  */
 export function useConnectedProviders(): ConnectedProviders {
   const { activeId, tokens } = useProviderAuth();
@@ -271,15 +273,17 @@ export function useConnectedProviders(): ConnectedProviders {
  * in the picker loses the model-to-provider association on every such
  * navigation, even though `currentModelId` itself survives untouched in
  * this provider one level up: the picker would render "Select a model"
- * for a selection that is still live and sendable. A module-level value,
- * written in lockstep with `currentModelId` — by the same
- * `setCurrentModelId` call and the same recovery effect below, never a
- * separate write — survives exactly as long as `currentModelId` does,
- * without adding a 15th member to the frozen context contract.
+ * for a selection that is still live and sendable. A module-level value
+ * survives exactly as long as `currentModelId` does, without adding a 15th
+ * member to the frozen context contract.
+ *
+ * `applySelection` (below) is its only writer, and it is the only writer of
+ * `currentModelId` too, so this cannot come to describe a different
+ * selection than the one on screen.
  */
 let lastSelectionProviderId: string | undefined;
 
-/** Read-only outside this module; only `ActiveChatProvider` writes it. */
+/** Read-only outside this module; only `applySelection` writes it. */
 export function getSelectionProviderId(): string | undefined {
   return lastSelectionProviderId;
 }
@@ -363,8 +367,12 @@ export type ResolvedRequest = {
  * place.
  *
  * An owner with no token yields `undefined`, which the transport turns into
- * "Connect a provider before sending a message." — the send fails closed
- * rather than being re-pointed at somebody else.
+ * "Connect <that provider> before sending this model's messages." — the send
+ * fails closed rather than being re-pointed at somebody else.
+ *
+ * The composer's send gate calls this too, and disables the button on the
+ * same `accessToken === undefined`, so that message is a backstop rather
+ * than the normal way a reader learns about it.
  */
 export function resolveRequest({
   activeAccessToken,
@@ -531,20 +539,29 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
    * tokens are found, and keeps it pointed at something usable after that.
    */
   const [currentModelId, setCurrentModelIdState] = useState("");
-  const currentModelIdRef = useRef(currentModelId);
-  useEffect(() => {
-    currentModelIdRef.current = currentModelId;
-  }, [currentModelId]);
 
   /**
-   * Which provider `currentModelId` was picked from — see `setCurrentModelId`.
-   * Every write here has a matching write to `lastSelectionProviderId`
-   * (the module-level mirror above): this ref is the value the recovery
-   * effect below reads back on its own next run, the module value is the
-   * same answer exposed to components outside this provider that need it
-   * to survive a remount this component itself does not undergo.
+   * The selection as one value — which model, and which provider it was
+   * picked from — rather than two refs that happen to be kept in step.
+   *
+   * They were two, and the two moved differently: the model id was mirrored
+   * from state inside an effect while the owner was written synchronously,
+   * so between a selection changing and React flushing passive effects the
+   * pair described a model that had never been picked from that provider.
+   * That is the whole bug class this branch keeps meeting — a provider id
+   * correlated with something by timing instead of carried on it — and no
+   * comment promising the two "move in lockstep" makes it structural.
+   * One object, written by `applySelection` alone, does: there is no way to
+   * set the model without saying whose it is.
+   *
+   * It leads `currentModelId` by a render rather than lagging it, which is
+   * the right direction for the only reader that matters — the transport
+   * resolver, consulted at send time, long after the write.
    */
-  const currentModelProviderRef = useRef<string | undefined>(undefined);
+  const selectionRef = useRef<{
+    modelId: string;
+    providerId: string | undefined;
+  }>({ modelId: "", providerId: undefined });
 
   const { activeId, tokens, setActiveId } = useProviderAuth();
   const activeIdRef = useRef(activeId);
@@ -555,6 +572,23 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     tokensRef.current = tokens;
   }, [tokens]);
+
+  /**
+   * The one writer of the selection, for all three of its homes: the ref
+   * above (what the recovery effect and the transport resolver read back),
+   * the module-level mirror (what components outside this provider read,
+   * across remounts this component does not undergo), and the state that
+   * renders it. Nothing else assigns any of them, so they cannot describe
+   * different selections.
+   */
+  const applySelection = useCallback(
+    (modelId: string, providerId: string | undefined) => {
+      selectionRef.current = { modelId, providerId };
+      lastSelectionProviderId = providerId;
+      setCurrentModelIdState(modelId);
+    },
+    []
+  );
 
   /**
    * `providerId` defaults to whichever provider is active right now, which
@@ -568,12 +602,9 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
    */
   const setCurrentModelId = useCallback(
     (id: string, providerId?: string) => {
-      const owner = id ? (providerId ?? activeId) : undefined;
-      currentModelProviderRef.current = owner;
-      lastSelectionProviderId = owner;
-      setCurrentModelIdState(id);
+      applySelection(id, id ? (providerId ?? activeId) : undefined);
     },
-    [activeId]
+    [activeId, applySelection]
   );
 
   const connected = useConnectedProviders();
@@ -598,22 +629,18 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
     const outcome = nextSelection({
       connected,
       currentModelId,
-      owner: currentModelProviderRef.current,
+      owner: selectionRef.current.providerId,
     });
 
     if (outcome.kind === "set") {
-      currentModelProviderRef.current = outcome.providerId;
-      lastSelectionProviderId = outcome.providerId;
-      setCurrentModelIdState(outcome.modelId);
+      applySelection(outcome.modelId, outcome.providerId);
       if (activeId !== outcome.providerId) {
         setActiveId(outcome.providerId);
       }
     } else if (outcome.kind === "clear") {
-      currentModelProviderRef.current = undefined;
-      lastSelectionProviderId = undefined;
-      setCurrentModelIdState("");
+      applySelection("", undefined);
     }
-  }, [connected, currentModelId, activeId, setActiveId]);
+  }, [applySelection, connected, currentModelId, activeId, setActiveId]);
 
   const [input, setInput] = useState("");
 
@@ -665,8 +692,8 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
         activeAccessToken: tokensRef.current?.accessToken,
         activeId: activeIdRef.current,
         connected: connectedRef.current,
-        modelId: currentModelIdRef.current,
-        owner: currentModelProviderRef.current,
+        modelId: selectionRef.current.modelId,
+        owner: selectionRef.current.providerId,
       })
     ),
   });

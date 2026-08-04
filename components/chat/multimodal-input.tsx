@@ -30,7 +30,9 @@ import {
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector";
 import {
+  type ConnectedProviders,
   getSelectionProviderId,
+  resolveRequest,
   useConnectedProviders,
 } from "@/hooks/use-active-chat";
 import { useProviderAuth } from "@/hooks/use-provider-auth";
@@ -103,7 +105,51 @@ function PureMultimodalInput({
   isLoading?: boolean;
 }) {
   const router = useRouter();
-  const { isConnected } = useProviderAuth();
+  const { activeId, tokens } = useProviderAuth();
+  const connected = useConnectedProviders();
+
+  /**
+   * Whether this send can actually go out — asked of `resolveRequest`, the
+   * same function the transport consults, rather than answered a second time
+   * here.
+   *
+   * The question is *not* "is the active provider connected". A request is
+   * addressed to the model's owner, and owner and active provider are
+   * deliberately allowed to diverge: `nextSelection` answers `"keep"`
+   * whenever the owner still holds a token, precisely so that connecting or
+   * merely looking at another provider does not disturb a live selection. So
+   * a reader can have a Claude model selected while `activeId` is `xai`,
+   * disconnect Grok, and watch `useProviderAuth`'s `isConnected` go false for
+   * a send that `resolveRequest` would still resolve perfectly — a button
+   * greyed out for good, under a tooltip naming a provider they already have
+   * connected.
+   *
+   * Calling the resolver is what keeps that from coming back. A second
+   * derivation here — "does `owner` appear in `connected`" — would be correct
+   * today and free to drift tomorrow; there is only one derivation, and both
+   * the gate and the send read it.
+   */
+  const owner = getSelectionProviderId();
+  const request = resolveRequest({
+    activeAccessToken: tokens?.accessToken,
+    activeId,
+    connected,
+    modelId: selectedModelId,
+    owner,
+  });
+  const canSend = Boolean(request.accessToken && request.modelId);
+
+  /**
+   * Named rather than generic whenever there is an owner to name: the state
+   * this most often describes is one connected provider short, not none at
+   * all, and "connect a provider" sends the reader to a popover that already
+   * says "2 connected". With nothing selected there is no owner yet and no
+   * particular provider to point at, so the generic wording is the honest one.
+   */
+  const sendHint = owner
+    ? `Connect ${registry[owner]?.label ?? owner} to send a message`
+    : "Connect a provider to send a message";
+
   const { setTheme, resolvedTheme } = useTheme();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
@@ -379,6 +425,7 @@ function PureMultimodalInput({
         <PromptInputFooter className="px-3 pb-3">
           <PromptInputTools>
             <ModelSelectorCompact
+              connected={connected}
               onModelChange={onModelChange}
               selectedModelId={selectedModelId}
             />
@@ -389,16 +436,16 @@ function PureMultimodalInput({
           ) : (
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="inline-flex">
+                <span className="inline-flex" data-testid="send-hint-trigger">
                   <PromptInputSubmit
                     className={cn(
                       "h-7 w-7 rounded-xl transition-all duration-200",
-                      input.trim() && isConnected
+                      input.trim() && canSend
                         ? "bg-foreground text-background hover:opacity-85 active:scale-95"
                         : "bg-muted text-muted-foreground/25 cursor-not-allowed"
                     )}
                     data-testid="send-button"
-                    disabled={!(input.trim() && isConnected)}
+                    disabled={!(input.trim() && canSend)}
                     status={status}
                     variant="secondary"
                   >
@@ -406,10 +453,8 @@ function PureMultimodalInput({
                   </PromptInputSubmit>
                 </span>
               </TooltipTrigger>
-              {isConnected ? null : (
-                <TooltipContent side="top">
-                  Connect a provider to send a message
-                </TooltipContent>
+              {canSend ? null : (
+                <TooltipContent side="top">{sendHint}</TooltipContent>
               )}
             </Tooltip>
           )}
@@ -572,8 +617,16 @@ function ModelSelectorOption({
 /** One connected provider's models, in the order they should be grouped. */
 type ModelGroup = { providerId: string; models: Model[] };
 
-function useModelGroups(): { groups: ModelGroup[] } {
-  const connected = useConnectedProviders();
+/**
+ * Takes the connection map rather than calling `useConnectedProviders()` for
+ * itself: the composer above already holds one for its send gate, and two
+ * instances in the same subtree means two full storage sweeps on mount and on
+ * every revocation, describing the same fact. Sharing the one map also means
+ * the picker and the gate cannot disagree about who is connected.
+ */
+function useModelGroups(connected: ConnectedProviders): {
+  groups: ModelGroup[];
+} {
   const [fetched, setFetched] = useState<Record<string, Model[]>>({});
 
   useEffect(() => {
@@ -604,15 +657,17 @@ function useModelGroups(): { groups: ModelGroup[] } {
 }
 
 function PureModelSelectorCompact({
+  connected,
   selectedModelId,
   onModelChange,
 }: {
+  connected: ConnectedProviders;
   selectedModelId: string;
   onModelChange?: (modelId: string, providerId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const { setActiveId } = useProviderAuth();
-  const { groups } = useModelGroups();
+  const { groups } = useModelGroups(connected);
 
   /**
    * `getSelectionProviderId()` (from `hooks/use-active-chat.tsx`) is the
