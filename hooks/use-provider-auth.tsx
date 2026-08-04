@@ -19,7 +19,7 @@ import {
   useState,
 } from "react";
 import { proxiedProviders } from "@/lib/oauth/providers";
-import { registry } from "@/lib/oauth/registry";
+import { currentOrigin, flowFor, registry } from "@/lib/oauth/registry";
 import { clientFor } from "@/lib/oauth/storage";
 
 export type PendingAuth =
@@ -244,10 +244,12 @@ function asCancellation(controller: AbortController, error: unknown): unknown {
  * Owns which provider is selected and whether it is connected.
  *
  * The three sign-in flows are not a preference — each provider's registered
- * client dictates which one is possible — so `connect()` branches on the
- * registry rather than on anything the reader chooses. Popup completes on its
- * own; device and paste both park in `pending` until the dialog drives them the
- * rest of the way.
+ * client dictates which one is possible — so `connect()` branches on
+ * `flowFor(activeId)` rather than on anything the reader chooses (and on the
+ * origin, for the one provider whose registered client permits more of them
+ * on loopback than it does in production; see `flowFor`). Popup completes on
+ * its own; device and paste both park in `pending` until the dialog drives
+ * them the rest of the way.
  */
 export function ProviderAuthProvider({ children }: { children: ReactNode }) {
   const [activeId, setActive] = useState("openrouter");
@@ -503,7 +505,7 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
    * writer for a provider's tokens, not just usually.
    */
   const connect = useCallback(async () => {
-    const { flow } = registry[activeId];
+    const flow = flowFor(activeId, currentOrigin());
     const client = clientFor(activeId);
 
     if (flow === "popup") {

@@ -22,8 +22,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { useProviderAuth } from "@/hooks/use-provider-auth";
-import { registry } from "@/lib/oauth/registry";
+import { openPopup } from "@/lib/oauth/popup-window";
+import { currentOrigin, flowFor, registry } from "@/lib/oauth/registry";
 import { CopyIcon } from "./icons";
 import { providerLogos } from "./provider-logos";
 
@@ -123,9 +125,12 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * The body of the dialog switches on `registry[activeId].flow`, because the
- * flow is what dictates the shape of the interaction, not a preference this
- * component gets to make.
+ * The body of the dialog switches on `flowFor(activeId, …)`, because the flow
+ * is what dictates the shape of the interaction, not a preference this
+ * component gets to make. It asks the same function `connect()` asks rather
+ * than reading the registry directly, so the body on screen and the flow
+ * actually being run cannot disagree — which they would for Gemini, whose
+ * flow depends on the origin.
  *
  * `connect()` and `submitCode()` throw on failure and clear `pending`
  * themselves, so every attempt below is wrapped in its own try/catch that
@@ -146,12 +151,14 @@ export function AuthDialog({
   open: boolean;
 }) {
   const { activeId, cancel, connect, pending, submitCode } = useProviderAuth();
-  const { flow, label, pasteHint } = registry[activeId];
+  const { label, pasteHint } = registry[activeId];
+  const flow = flowFor(activeId, currentOrigin());
   const Logo = providerLogos[activeId];
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [code, setCode] = useState("");
+  const [verifying, setVerifying] = useState(false);
   const [, copyToClipboard] = useCopyToClipboard();
 
   const attemptRef = useRef(0);
@@ -174,7 +181,8 @@ export function AuthDialog({
    * The provider window this dialog opened, so it can be closed again once
    * the poll comes back approved — the device flows' equivalent of what
    * OpenRouter's popup already does for itself (`postCallbackToOpener` ends
-   * on `window.close()` because by then it is same-origin).
+   * on `window.close()` because by then it is same-origin). It is a popup
+   * rather than a tab; see `handleOpenVerification`.
    *
    * A window opened by `window.open` may be closed by its opener whatever
    * origin it has since navigated to; `close()` is one of the handful of
@@ -201,6 +209,7 @@ export function AuthDialog({
     const opened = verificationWindowRef.current;
 
     verificationWindowRef.current = null;
+    setVerifying(false);
 
     if (!opened) {
       return;
@@ -216,30 +225,41 @@ export function AuthDialog({
   }, []);
 
   /**
-   * Opens the verification page and keeps the handle.
+   * Opens the verification page as a popup, and keeps the handle.
+   *
+   * A popup rather than a tab, which is the change the owner asked for: a
+   * tab takes the whole viewport, so the reader loses sight of the code they
+   * are meant to be checking and of the dialog that is waiting on them, and
+   * has to find their way back. The popup sits beside the app with both
+   * visible, which is what OpenRouter's flow has always done —
+   * `lib/oauth/popup-window.ts` is the same window, deliberately.
    *
    * `window.open` rather than letting the anchor navigate, because an anchor
-   * hands back nothing to close later. The `rel="noopener noreferrer"` the
-   * anchor still carries is deliberately *not* passed here: `noopener` is
-   * precisely the feature that makes `window.open` return `null`, so there
-   * is no version of this that both severs the opener and keeps a handle.
-   * The page being opened is the provider's own verification page, at a URL
-   * that came from that provider over TLS.
+   * hands back nothing to close later and no way to ask for a popup at all.
+   * The `rel="noopener noreferrer"` the anchor still carries is not passed
+   * here, and that is deliberate: `noopener` is precisely the feature that makes
+   * `window.open` return `null` and makes the browser ignore both the window
+   * name and the features, so there is no version of this that both severs
+   * the opener and keeps a popup it can close. The page being opened is the
+   * provider's own verification page, at a URL that came from that provider
+   * over TLS.
+   *
+   * The name is per-provider and stable, so clicking again re-presents the
+   * window that is already open instead of stacking a second one — the same
+   * trade `use-provider-auth.tsx`'s `tabNameFor` makes for the paste flow.
    *
    * When there is no handle to be had — a popup blocker, a runtime that does
    * not implement `open` — the click is left alone and the anchor's own
-   * `target="_blank"` does the navigating, exactly as it did before. Losing
-   * the convenience is fine; losing the sign-in is not.
+   * `target="_blank"` does the navigating, exactly as it did before, and
+   * nothing claims a window was opened. Losing the popup is fine; losing the
+   * sign-in is not.
    */
   const handleOpenVerification = useCallback(
     (event: MouseEvent<HTMLAnchorElement>) => {
-      let opened: Window | null = null;
-
-      try {
-        opened = window.open(event.currentTarget.href, "_blank");
-      } catch {
-        opened = null;
-      }
+      const opened = openPopup(
+        event.currentTarget.href,
+        `aioauth-verify-${activeId}`
+      );
 
       if (!opened) {
         return;
@@ -247,8 +267,15 @@ export function AuthDialog({
 
       event.preventDefault();
       verificationWindowRef.current = opened;
+      setVerifying(true);
+
+      try {
+        opened.focus();
+      } catch {
+        // A window we cannot focus is not a failed sign-in.
+      }
     },
-    []
+    [activeId]
   );
 
   /**
@@ -267,6 +294,11 @@ export function AuthDialog({
     attemptRef.current += 1;
     const attemptId = attemptRef.current;
     setBusy(true);
+
+    // A new request means a new code, which makes whatever is in an open
+    // verification window unredeemable. Retry is the path that reaches this
+    // with a window open; on the first request there is nothing to close.
+    closeVerificationWindow();
 
     connect()
       .then(() => {
@@ -334,6 +366,10 @@ export function AuthDialog({
    * The guard is also reset here, so a reopened dialog starts a fresh
    * request rather than sitting on the "Requesting a device code..." line
    * forever.
+   *
+   * The verification window goes with it. `cancel()` abandons the attempt, so
+   * the code in that window can no longer be redeemed by anything — leaving
+   * it open is the dead window this task is about, one click further along.
    */
   useEffect(() => {
     if (open) {
@@ -347,8 +383,9 @@ export function AuthDialog({
 
     wasOpenRef.current = false;
     deviceStartedRef.current = false;
+    closeVerificationWindow();
     cancel();
-  }, [cancel, open]);
+  }, [cancel, closeVerificationWindow, open]);
 
   const handlePopupContinue = useCallback(() => {
     setError(undefined);
@@ -494,7 +531,14 @@ export function AuthDialog({
               disabled={busy}
               onClick={handlePopupContinue}
             >
-              {busy ? "Waiting for the popup..." : "Continue"}
+              {busy ? (
+                <>
+                  <Spinner className="size-4 shrink-0" />
+                  Waiting for the popup...
+                </>
+              ) : (
+                "Continue"
+              )}
             </Button>
           </div>
         ) : null}
@@ -528,14 +572,40 @@ export function AuthDialog({
                     rel="noopener noreferrer"
                     target="_blank"
                   >
-                    Open verification page
+                    {verifying
+                      ? "Reopen verification page"
+                      : "Open verification page"}
                     <ExternalLinkIcon aria-hidden="true" className="size-4" />
                   </a>
                 </Button>
-                <DialogDescription>
-                  This dialog closes on its own once you approve the code, and
-                  the page you opened closes with it.
-                </DialogDescription>
+                {/*
+                  The loader, and the one honest thing it can say. Nothing
+                  here can speak for what the provider's popup is doing — it
+                  is cross-origin, and this page cannot see inside it — so a
+                  progress bar would be invented. What is genuinely happening
+                  is a poll: the SDK is asking the provider every few seconds
+                  whether this code has been approved, from the moment the
+                  code appears until it is approved, denied or expires. An
+                  indeterminate spinner is exactly that claim and no more, and
+                  it appears only once a window has actually been opened,
+                  since before that the reader is the one being waited on.
+                */}
+                {verifying ? (
+                  <DialogDescription
+                    className="flex items-center gap-2"
+                    data-testid="device-waiting"
+                  >
+                    <Spinner className="size-4 shrink-0" />
+                    Waiting for you to approve the code in the {label} window.
+                    This dialog closes on its own when you do, and that window
+                    closes with it.
+                  </DialogDescription>
+                ) : (
+                  <DialogDescription>
+                    This dialog closes on its own once you approve the code, and
+                    the window you opened closes with it.
+                  </DialogDescription>
+                )}
               </>
             ) : (
               // Once an attempt has failed, the error message below already
