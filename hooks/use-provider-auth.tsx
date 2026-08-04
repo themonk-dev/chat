@@ -18,8 +18,14 @@ import {
   useRef,
   useState,
 } from "react";
+import { handshakePopupReceiver } from "@/lib/oauth/popup-handshake";
 import { proxiedProviders } from "@/lib/oauth/providers";
-import { currentOrigin, flowFor, registry } from "@/lib/oauth/registry";
+import {
+  currentOrigin,
+  flowFor,
+  registry,
+  SEVERING_AUTH_PAGES,
+} from "@/lib/oauth/registry";
 import { clientFor } from "@/lib/oauth/storage";
 
 export type PendingAuth =
@@ -509,12 +515,30 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
     const client = clientFor(activeId);
 
     if (flow === "popup") {
+      const redirectUri = `${window.location.origin}/callback`;
+
+      /*
+       * Two receivers, and which one is not a preference: a provider whose
+       * authorization page sends an enforced COOP header severs the popup
+       * from this window, taking `window.opener` and a truthful `.closed`
+       * with it. `handshakePopupReceiver` gets the code back over a
+       * same-origin `BroadcastChannel` instead, and never reads `.closed` —
+       * on a severed handle that signal reports a window still on screen as
+       * closed, which is what failed every Claude sign-in a second after it
+       * opened. Everyone else keeps the SDK's own receiver, which detects a
+       * reader closing the window and is correct where nothing is severed.
+       */
+      const receiver = SEVERING_AUTH_PAGES.has(activeId)
+        ? handshakePopupReceiver({
+            redirectUri,
+            windowName: tabNameFor(activeId),
+          })
+        : popupReceiver({ redirectUri });
+
       await runAttempt((signal, isCurrent) =>
         client
           .login({
-            receiver: popupReceiver({
-              redirectUri: `${window.location.origin}/callback`,
-            }),
+            receiver,
             signal,
           })
           .then((result) => {

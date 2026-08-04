@@ -1,11 +1,12 @@
 /**
  * Run at the deployed origin, not jsdom's default `localhost`.
  *
- * Claude signs in by pasting only where a loopback redirect is unavailable —
- * on loopback it now completes in a popup (see `flowFor`). jsdom serves every
- * test from `localhost` unless told otherwise, so a paste-flow test left on
- * the default origin is testing a flow that origin never runs. This is the
- * one docblock that puts the test on the origin its subject belongs to.
+ * Gemini signs in by pasting only where a loopback redirect is unavailable —
+ * on loopback it completes in a popup instead (see `flowFor`). jsdom serves
+ * every test from `localhost` unless told otherwise, so a paste-flow test
+ * left on the default origin is testing a flow that origin never runs. This
+ * is the one docblock that puts the test on the origin its subject belongs
+ * to.
  *
  * @vitest-environment jsdom
  * @vitest-environment-options { "url": "https://chat.themonk.dev/" }
@@ -71,7 +72,7 @@ function stubWindowOpen(): FakeTab[] {
 }
 
 /**
- * A paste-flow client that parks at `prompt` the way Claude's really does,
+ * A paste-flow client that parks at `prompt` the way Gemini's really does,
  * and then answers the reader's pasted code with `reply`.
  */
 function pasteClient(reply: () => Promise<TokenSet>) {
@@ -81,14 +82,14 @@ function pasteClient(reply: () => Promise<TokenSet>) {
     login: vi.fn().mockImplementation(async (options) => {
       const started = await options.receiver.start({
         openUrl: options.openUrl,
-        // Claude's real descriptor, so `manualReceiver` reads the pasted
-        // `code#state` with the same parser the hook and the SDK use.
-        provider: proxiedProviders.claude,
+        // Gemini's real descriptor, so `manualReceiver` reads the pasted
+        // redirect URL with the same parser the hook and the SDK use.
+        provider: proxiedProviders.gemini,
         signal: options.signal,
       });
 
       await started.present(
-        "https://claude.ai/oauth/authorize?state=live-state"
+        "https://accounts.google.com/o/oauth2/v2/auth?state=live-state"
       );
       await started.wait();
 
@@ -99,7 +100,7 @@ function pasteClient(reply: () => Promise<TokenSet>) {
 }
 
 /**
- * `manage-providers.tsx` reduced to "open the dialog on Claude".
+ * `manage-providers.tsx` reduced to "open the dialog on Gemini".
  *
  * `onOpenChange` is a `useState` setter, exactly as both real call sites
  * pass one. It matters: `AuthDialog`'s mount effect lists `startDevice`
@@ -111,12 +112,12 @@ function pasteClient(reply: () => Promise<TokenSet>) {
 function Harness() {
   const [, setOpen] = useState(true);
   const { setActiveId } = useProviderAuth();
-  const pickClaude = useCallback(() => setActiveId("claude"), [setActiveId]);
+  const pickGemini = useCallback(() => setActiveId("gemini"), [setActiveId]);
 
   return (
     <>
-      <button onClick={pickClaude} type="button">
-        pick claude
+      <button onClick={pickGemini} type="button">
+        pick gemini
       </button>
       <AuthDialog onOpenChange={setOpen} open={true} />
     </>
@@ -131,7 +132,7 @@ function renderDialog() {
   );
 
   act(() => {
-    fireEvent.click(screen.getByText("pick claude"));
+    fireEvent.click(screen.getByText("pick gemini"));
   });
 }
 
@@ -169,7 +170,7 @@ describe("the paste dialog", () => {
     renderDialog();
 
     expect(screen.getByTestId("auth-dialog-open").textContent).toMatch(
-      /^Open Claude/
+      /^Open Gemini/
     );
 
     act(() => {
@@ -178,23 +179,17 @@ describe("the paste dialog", () => {
     await settle();
 
     expect(screen.getByTestId("auth-dialog-open").textContent).toMatch(
-      /^Reopen Claude/
+      /^Reopen Gemini/
     );
     expect(screen.getByTestId("auth-dialog-paste-scope")).toBeTruthy();
   });
 
   /**
-   * The error the owner actually saw, for hours, and could do nothing with:
-   *
-   *   Token request to /api/token/claude failed (HTTP 429): Rate limited.
-   *   Please try again later.
-   *
-   * It names an internal proxy path, and its advice ("try again later") is
-   * the opposite of useful — retrying immediately is what keeps the limit
-   * hot. Verified live against Claude's real token endpoint: a single cold,
-   * well-formed request carrying an invalid code is answered `429` with
-   * exactly that body, so this is what a *rejected* code looks like there,
-   * not evidence of a flood.
+   * A rejected code answered with an internal proxy path and "try again
+   * later" is not something the reader can act on — it names an endpoint
+   * they have never heard of, and the advice, followed immediately, is what
+   * keeps a rate limit in place. The dialog owes them wording that names
+   * neither.
    */
   it("explains a rate-limited exchange instead of quoting the proxy path", async () => {
     vi.mocked(clientFor).mockImplementation(
@@ -203,7 +198,7 @@ describe("the paste dialog", () => {
           Promise.reject(
             new OAuthError(
               "token_request_failed",
-              "Token request to /api/token/claude failed (HTTP 429): Rate limited. Please try again later.",
+              "Token request to /api/token/gemini failed (HTTP 429): Rate limited. Please try again later.",
               { status: 429 }
             )
           )
@@ -219,7 +214,10 @@ describe("the paste dialog", () => {
 
     act(() => {
       fireEvent.change(screen.getByTestId("auth-dialog-paste-input"), {
-        target: { value: "some-code#live-state" },
+        target: {
+          value:
+            "http://localhost:1455/oauth2callback?code=some-code&state=live-state",
+        },
       });
     });
 
@@ -230,7 +228,7 @@ describe("the paste dialog", () => {
 
     const alert = await screen.findByRole("alert");
 
-    expect(alert.textContent).not.toContain("/api/token/claude");
+    expect(alert.textContent).not.toContain("/api/token/gemini");
     expect(alert.textContent).toMatch(/rate-limit/i);
     expect(alert.textContent).toMatch(/wait/i);
   });

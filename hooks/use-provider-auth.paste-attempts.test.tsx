@@ -1,6 +1,6 @@
 /**
- * The deployed origin: on loopback, Claude no longer has a paste attempt to
- * have bugs in — it completes in a popup (see `flowFor`). This whole file is
+ * The deployed origin: on loopback, Gemini has no paste attempt to have bugs
+ * in — it completes in a popup instead (see `flowFor`). This whole file is
  * about the lifetime of one paste attempt, so it belongs on the origin where
  * that attempt exists.
  *
@@ -20,7 +20,7 @@ import { clientFor } from "@/lib/oauth/storage";
 import { ProviderAuthProvider, useProviderAuth } from "./use-provider-auth";
 
 /**
- * These tests drive the **real** `AuthClient` against Claude's real
+ * These tests drive the **real** `AuthClient` against Gemini's real
  * descriptor, not a fake `login`.
  *
  * That is the point of the file. The bug this task chased was reported as
@@ -40,7 +40,7 @@ import { ProviderAuthProvider, useProviderAuth } from "./use-provider-auth";
  *     in flight with its `pending:<state>` record stranded in storage;
  *   - the reader's code then failed the SDK's `state` comparison **before
  *     any token request was made at all**, so the replay theory cannot be
- *     what earns a 429: Anthropic never saw those attempts.
+ *     what earns a 429: the provider never saw those attempts.
  */
 
 vi.mock("@/lib/oauth/storage", () => ({
@@ -106,9 +106,9 @@ function stubFetch(): void {
 function tokenResponse(): Response {
   return new Response(
     JSON.stringify({
-      access_token: "claude-access-token",
+      access_token: "gemini-access-token",
       expires_in: 3600,
-      refresh_token: "claude-refresh-token",
+      refresh_token: "gemini-refresh-token",
       token_type: "Bearer",
     }),
     { headers: { "content-type": "application/json" }, status: 200 }
@@ -125,14 +125,14 @@ function invalidGrantResponse(): Response {
   );
 }
 
-function useRealClaudeClient(): void {
+function useRealGeminiClient(): void {
   const client = createBrowserAuthClient({
-    clientId: (publicClientIds as Record<string, string>).claude,
-    provider: proxiedProviders.claude,
+    clientId: (publicClientIds as Record<string, string>).gemini,
+    provider: proxiedProviders.gemini,
   });
 
   // `openrouter` is the hook's initial `activeId`, so its client is read
-  // once on mount before any test touches Claude. Nothing here exercises it.
+  // once on mount before any test touches Gemini. Nothing here exercises it.
   const inert = {
     deviceLogin: vi.fn(),
     getTokens: vi.fn().mockResolvedValue(undefined),
@@ -141,11 +141,11 @@ function useRealClaudeClient(): void {
   };
 
   vi.mocked(clientFor).mockImplementation((id: string) =>
-    id === "claude" ? (client as never) : (inert as never)
+    id === "gemini" ? (client as never) : (inert as never)
   );
 }
 
-/** The `state` Claude's authorization URL carries, as the reader's tab sees it. */
+/** The `state` Gemini's authorization URL carries, as the reader's tab sees it. */
 function stateOf(url: string): string {
   const value = new URL(url).searchParams.get("state");
 
@@ -161,6 +161,17 @@ function mintedStates(opened: OpenedTab[]): string[] {
   return [...new Set(opened.map((entry) => stateOf(entry.url)))];
 }
 
+/**
+ * What the reader pastes back, in the shape Gemini's flow actually produces:
+ * the whole address bar of the `localhost` redirect that failed to load,
+ * carrying `code` and `state` as query params. Gemini has no custom
+ * `parseCallback`, so this is read by the SDK's standard parser, the same
+ * one a full redirect URL from any other provider would be.
+ */
+function pastedRedirect(code: string, state: string): string {
+  return `http://localhost:1455/oauth2callback?code=${code}&state=${state}`;
+}
+
 function pendingRecordKeys(): string[] {
   return Object.keys(sessionStorage).filter((key) =>
     key.startsWith("pending:")
@@ -173,7 +184,7 @@ function renderAuth() {
   });
 
   act(() => {
-    rendered.result.current.setActiveId("claude");
+    rendered.result.current.setActiveId("gemini");
   });
 
   return rendered;
@@ -186,7 +197,7 @@ describe("the paste flow's live attempt", () => {
     tokenReply = tokenResponse;
     vi.mocked(clientFor).mockReset();
     stubFetch();
-    useRealClaudeClient();
+    useRealGeminiClient();
   });
 
   afterEach(() => {
@@ -196,7 +207,7 @@ describe("the paste flow's live attempt", () => {
 
   /**
    * The mechanism the earlier review described, pinned so it cannot come
-   * back: clicking "Open Claude" a second time used to call
+   * back: clicking "Open Gemini" a second time used to call
    * `client.login()` again, and `login()` calls `createAuthorization()`,
    * which mints a new `state` and a new PKCE verifier every single time.
    * The reader was then holding a tab whose code belonged to an
@@ -249,17 +260,17 @@ describe("the paste flow's live attempt", () => {
     const visible = stateOf(opened[0].url);
 
     await act(async () => {
-      await result.current.submitCode(`the-code#${visible}`);
+      await result.current.submitCode(pastedRedirect("the-code", visible));
     });
 
     expect(tokenCalls).toHaveLength(1);
-    expect(tokenCalls[0].url).toBe("/api/token/claude");
+    expect(tokenCalls[0].url).toBe("/api/token/gemini");
     expect(new URLSearchParams(tokenCalls[0].body).get("code")).toBe(
       "the-code"
     );
     expect(result.current.isConnected).toBe(true);
     expect((result.current.tokens as TokenSet).accessToken).toBe(
-      "claude-access-token"
+      "gemini-access-token"
     );
   });
 
@@ -287,7 +298,7 @@ describe("the paste flow's live attempt", () => {
 
     await act(async () => {
       await expect(
-        result.current.submitCode(`first-code#${first}`)
+        result.current.submitCode(pastedRedirect("first-code", first))
       ).rejects.toThrow();
     });
     expect(tokenCalls).toHaveLength(1);
@@ -300,7 +311,7 @@ describe("the paste flow's live attempt", () => {
 
     await act(async () => {
       await expect(
-        result.current.submitCode(`first-code#${first}`)
+        result.current.submitCode(pastedRedirect("first-code", first))
       ).rejects.toThrow(/earlier/i);
     });
 
@@ -329,7 +340,9 @@ describe("the paste flow's live attempt", () => {
 
     const first = stateOf(opened[0].url);
     const failure = await act(() =>
-      result.current.submitCode(`first-code#${first}`).catch((error) => error)
+      result.current
+        .submitCode(pastedRedirect("first-code", first))
+        .catch((error) => error)
     );
 
     expect(String(failure)).toMatch(/invalid|authorization code/i);
@@ -368,8 +381,8 @@ describe("the paste flow's live attempt", () => {
  * The same-provider successive-attempt gap, which is the one place the two
  * existing guards both legitimately pass.
  *
- * `activeId` never moves — it is Claude throughout — so an id comparison
- * sees agreement. The token's own `provider` tag says `claude`, which is
+ * `activeId` never moves — it is Gemini throughout — so an id comparison
+ * sees agreement. The token's own `provider` tag says `gemini`, which is
  * true, so the tag pairing sees agreement too. Neither can tell that the
  * attempt which produced it was abandoned two attempts ago. Only the
  * attempt's own identity can, which is what the sequence guard adds.
@@ -387,9 +400,9 @@ describe("a superseded attempt for the same provider", () => {
   it("cannot write its token once a later attempt has started", async () => {
     stubWindowOpen();
 
-    const claudeToken: TokenSet = {
-      accessToken: "abandoned-claude-token",
-      provider: "claude",
+    const geminiToken: TokenSet = {
+      accessToken: "abandoned-gemini-token",
+      provider: "gemini",
       raw: {},
       tokenType: "Bearer",
     };
@@ -403,7 +416,7 @@ describe("a superseded attempt for the same provider", () => {
     // A client that ignores its abort signal entirely, the way a real
     // exchange already on the wire does: the request completes, and the
     // token arrives long after the reader walked away from it.
-    const claudeClient = {
+    const geminiClient = {
       deviceLogin: vi.fn(),
       getTokens: vi.fn().mockResolvedValue(undefined),
       login: vi.fn().mockImplementation(async (options) => {
@@ -411,16 +424,18 @@ describe("a superseded attempt for the same provider", () => {
 
         const started = await options.receiver.start({
           openUrl: options.openUrl,
-          provider: proxiedProviders.claude,
+          provider: proxiedProviders.gemini,
           signal: options.signal,
         });
 
-        await started.present("https://claude.ai/oauth/authorize?state=s1");
+        await started.present(
+          "https://accounts.google.com/o/oauth2/v2/auth?state=s1"
+        );
 
         if (logins === 1) {
           await firstDone;
 
-          return claudeToken;
+          return geminiToken;
         }
 
         return new Promise(() => undefined);
@@ -428,7 +443,7 @@ describe("a superseded attempt for the same provider", () => {
       logout: vi.fn().mockResolvedValue(undefined),
     };
 
-    vi.mocked(clientFor).mockImplementation(() => claudeClient as never);
+    vi.mocked(clientFor).mockImplementation(() => geminiClient as never);
 
     const { result } = renderAuth();
 

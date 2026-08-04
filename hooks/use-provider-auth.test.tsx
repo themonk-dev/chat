@@ -1,10 +1,11 @@
 /**
  * The deployed origin, because the paste cases below are about the origin
- * where pasting is the only thing that works. On loopback — jsdom's default —
- * both Claude and Gemini complete in a popup instead (see `flowFor`), so
- * those cases would be exercising a flow that origin never runs. The popup
- * and device cases in this file are unaffected: their providers declare
- * those flows everywhere.
+ * where pasting is the only thing Gemini can do. On loopback — jsdom's
+ * default — Gemini completes in a popup instead (see `flowFor`), so those
+ * cases would be exercising a flow that origin never runs. The popup and
+ * device cases in this file are unaffected: their providers declare those
+ * flows everywhere, and the other test that names Claude never drives its
+ * flow at all — it uses the id only as a place to restore `activeId` to.
  *
  * @vitest-environment jsdom
  * @vitest-environment-options { "url": "https://chat.themonk.dev/" }
@@ -39,9 +40,10 @@ type FakeReceiver = {
  * `wait()`, `close()`. Standing in for the parts of `login()` this suite
  * does not need to re-prove — PKCE, the token exchange itself — while still
  * exercising `manualReceiver`'s real `prompt`/parse handshake, including its
- * real redirect-URI resolution (`provider.redirect.hostedUri`, the same
- * field Claude's real descriptor sets, is what this task's "no redirect
- * URI" bug was missing).
+ * real redirect-URI resolution. `provider.redirect.hostedUri` here stands in
+ * for whatever a real descriptor supplies — Claude's own `hostedUri`,
+ * Gemini's loopback derivation — which is what this task's "no redirect URI"
+ * bug was missing entirely.
  */
 async function fakeLogin(
   options: { receiver: FakeReceiver } & Parameters<FakeReceiver["start"]>[0],
@@ -544,24 +546,24 @@ describe("useProviderAuth", () => {
    * happens rather than waiting for the reader, and `submitCode` is what
    * actually unblocks the exchange and lands the token.
    */
-  it("completes a paste connect through client.login(), matching Claude's real 'no redirect URI' failure mode fixed here", async () => {
-    const claudeToken: TokenSet = {
-      accessToken: "claude-access-token",
-      provider: "claude",
+  it("completes a paste connect through client.login(), matching Gemini's real 'no redirect URI' failure mode fixed here", async () => {
+    const geminiToken: TokenSet = {
+      accessToken: "gemini-access-token",
+      provider: "gemini",
       raw: {},
       tokenType: "Bearer",
     };
-    const claudeClient = makeClient({
+    const geminiClient = makeClient({
       login: vi
         .fn()
         .mockImplementation((options) =>
-          fakeLogin(options, "claude", claudeToken)
+          fakeLogin(options, "gemini", geminiToken)
         ),
     });
     const openrouterClient = makeClient();
 
     const clients: Record<string, FakeClient> = {
-      claude: claudeClient,
+      gemini: geminiClient,
       openrouter: openrouterClient,
     };
     vi.mocked(clientFor).mockImplementation(
@@ -573,7 +575,7 @@ describe("useProviderAuth", () => {
     });
 
     act(() => {
-      result.current.setActiveId("claude");
+      result.current.setActiveId("gemini");
     });
 
     // connect() resolves as soon as `prompt` is called — it does not wait
@@ -593,7 +595,7 @@ describe("useProviderAuth", () => {
     });
 
     expect(result.current.pending).toBeUndefined();
-    expect(result.current.tokens).toEqual(claudeToken);
+    expect(result.current.tokens).toEqual(geminiToken);
     expect(result.current.isConnected).toBe(true);
   });
 
@@ -612,23 +614,23 @@ describe("useProviderAuth", () => {
    * succeeding.
    */
   it("aborts a cancelled paste attempt and refuses a submitCode call for it afterward", async () => {
-    const claudeToken: TokenSet = {
-      accessToken: "claude-access-token",
-      provider: "claude",
+    const geminiToken: TokenSet = {
+      accessToken: "gemini-access-token",
+      provider: "gemini",
       raw: {},
       tokenType: "Bearer",
     };
-    let claudeSignal: AbortSignal | undefined;
-    const claudeClient = makeClient({
+    let geminiSignal: AbortSignal | undefined;
+    const geminiClient = makeClient({
       login: vi.fn().mockImplementation((options) => {
-        claudeSignal = options.signal;
-        return fakeLogin(options, "claude", claudeToken);
+        geminiSignal = options.signal;
+        return fakeLogin(options, "gemini", geminiToken);
       }),
     });
     const openrouterClient = makeClient();
 
     const clients: Record<string, FakeClient> = {
-      claude: claudeClient,
+      gemini: geminiClient,
       openrouter: openrouterClient,
     };
     vi.mocked(clientFor).mockImplementation(
@@ -640,7 +642,7 @@ describe("useProviderAuth", () => {
     });
 
     act(() => {
-      result.current.setActiveId("claude");
+      result.current.setActiveId("gemini");
     });
 
     await act(async () => {
@@ -657,9 +659,9 @@ describe("useProviderAuth", () => {
     });
     expect(result.current.activeId).toBe("openrouter");
     expect(result.current.pending).toBeUndefined();
-    expect(claudeSignal?.aborted).toBe(true);
+    expect(geminiSignal?.aborted).toBe(true);
 
-    // Nothing in the real UI can still call this — Claude's AuthDialog
+    // Nothing in the real UI can still call this — Gemini's AuthDialog
     // unmounted the moment activeId changed — but if something did, it
     // must not silently pretend to succeed.
     await expect(staleSubmitCode("code=abc123&state=xyz")).rejects.toThrow(
