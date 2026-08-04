@@ -9,6 +9,8 @@
  * side.
  */
 
+import { assertBrowser } from "./browser-only";
+
 const CODE_ASSIST_METADATA = {
   ideType: "IDE_UNSPECIFIED",
   platform: "PLATFORM_UNSPECIFIED",
@@ -137,12 +139,22 @@ async function onboard(
  * `onStatus` is called at each stage so a caller can surface progress —
  * onboarding a fresh account polls for up to twenty seconds, and silence for
  * that long reads as a hang.
+ *
+ * Browser-only, asserted for the same reason as `copilotCredentialFor`: keying
+ * `projectCache` by the access token stops one reader reading another's entry,
+ * but on a server the map itself would be a process-wide record of which Google
+ * Cloud project belongs to which token, kept for the life of the lambda. The
+ * root-relative `/api/upstream/…` URL below cannot resolve off-page, so this
+ * already fails on the server — but it fails on the *fetch*, with a URL parse
+ * error that says nothing about why, and only after the cache has been read.
  */
 export async function resolveGeminiProject(
   accessToken: string,
   onStatus?: (message: string) => void,
   fetchImpl: typeof fetch = fetch
 ): Promise<string> {
+  assertBrowser("Gemini Code Assist project resolution");
+
   const cached = projectCache.get(accessToken);
 
   if (cached) {

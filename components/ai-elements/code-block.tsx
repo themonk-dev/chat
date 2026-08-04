@@ -178,6 +178,24 @@ export const highlightCode = (
   // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-callbacks)
   callback?: (result: TokenizedCode) => void
 ): TokenizedCode | null => {
+  /*
+   * Never on the server. This is called from a render body — see
+   * `CodeBlockContent`'s `useState` initialiser — and the three maps below
+   * (`tokensCache` in particular, which holds the code itself) are module
+   * scope, shared by every reader in the lambda. Today SSR renders no messages
+   * so nothing accumulates; that is a property of the current page rather than
+   * of this component, and one server-rendered transcript would change it.
+   *
+   * Degrades rather than throwing, unlike the token stores in `lib/oauth`: a
+   * server-rendered code block still has to render. `null` puts it on the raw
+   * tokens the caller already falls back to, which is what the first client
+   * paint shows regardless, and the effect highlights for real once there is a
+   * browser to do it in.
+   */
+  if (typeof window === "undefined") {
+    return null;
+  }
+
   const tokensCacheKey = getTokensCacheKey(code, language);
 
   // Return cached result if available
