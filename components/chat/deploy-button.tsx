@@ -17,7 +17,7 @@ export function DeployButton() {
   return (
     <Button
       asChild
-      className="hidden h-7 gap-1.5 rounded-lg border-border/50 px-2 text-[11px] text-muted-foreground shadow-none transition-colors hover:text-foreground focus-visible:border-border/50 focus-visible:ring-0 active:translate-y-0 sm:inline-flex"
+      className="hidden h-7 gap-1.5 rounded-lg border-border/50 px-2 text-[11px] text-foreground shadow-none focus-visible:border-border/50 focus-visible:ring-0 active:translate-y-0 sm:inline-flex"
       size="sm"
       variant="outline"
     >
@@ -36,7 +36,7 @@ export function DeployButton() {
         >
           <path d="M37.5274 0L75.0548 65H0L37.5274 0Z" />
         </svg>
-        Deploy
+        Deploy on Vercel
       </a>
     </Button>
   );
