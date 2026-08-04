@@ -26,6 +26,7 @@ export type PendingAuth =
 
 type ProviderAuthValue = {
   activeId: string;
+  cancel: () => void;
   connect: () => Promise<void>;
   disconnect: () => void;
   isConnected: boolean;
@@ -160,6 +161,34 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
   }, [activeId]);
 
   /**
+   * Abandons whatever attempt is in flight, without changing provider.
+   *
+   * `setActiveId` used to be the only thing that did this, which quietly made
+   * "the reader switched provider" the sole way an attempt could ever be
+   * stopped. A device poll is a request every few seconds for the fifteen
+   * minutes its code is valid — and OpenAI's device endpoint answers 403 for
+   * "not approved yet", so an abandoned one is a 403 loop against a
+   * provider's auth endpoint, which is how an origin earns a rate limit.
+   * `manage-providers.tsx` only restores (and so only calls `setActiveId`)
+   * when the dialog was opened for a *different* provider than the active
+   * one; connecting the provider you are already on, or connecting from
+   * `suggested-actions.tsx`'s disconnected notice, went through neither
+   * path, so closing that dialog left the poll running with nothing left
+   * able to stop it.
+   *
+   * Aborting is all this does. It deliberately does not touch
+   * `taggedTokens`: a result that lands anyway is already made safe by that
+   * value's own provider pairing, and unwinding a token that genuinely
+   * arrived would be a different, worse bug.
+   */
+  const cancel = useCallback(() => {
+    connectAbortRef.current?.abort();
+    connectAbortRef.current = null;
+    pasteAttemptRef.current = null;
+    setPending(undefined);
+  }, []);
+
+  /**
    * Switching away from whatever `connect()` is mid-flight for is exactly
    * the moment that attempt's result stops being wanted: cuts off its
    * `AbortController`, so a device poll or an open popup that finishes
@@ -168,14 +197,14 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
    * arrives anyway from landing in the wrong place — this only saves the
    * network activity, it is not what makes that safe.
    */
-  const setActiveId = useCallback((id: string) => {
-    connectAbortRef.current?.abort();
-    connectAbortRef.current = null;
-    pasteAttemptRef.current = null;
-    setActive(id);
-    setPending(undefined);
-    sessionStorage.setItem(ACTIVE_KEY, id);
-  }, []);
+  const setActiveId = useCallback(
+    (id: string) => {
+      cancel();
+      setActive(id);
+      sessionStorage.setItem(ACTIVE_KEY, id);
+    },
+    [cancel]
+  );
 
   /**
    * Runs one sign-in attempt under its own `AbortController`, and owns
@@ -393,6 +422,7 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<ProviderAuthValue>(
     () => ({
       activeId,
+      cancel,
       connect,
       disconnect,
       isConnected: Boolean(tokens?.accessToken),
@@ -401,7 +431,16 @@ export function ProviderAuthProvider({ children }: { children: ReactNode }) {
       submitCode,
       tokens,
     }),
-    [activeId, connect, disconnect, pending, setActiveId, submitCode, tokens]
+    [
+      activeId,
+      cancel,
+      connect,
+      disconnect,
+      pending,
+      setActiveId,
+      submitCode,
+      tokens,
+    ]
   );
 
   return (

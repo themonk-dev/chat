@@ -9,9 +9,27 @@ export type Model = { id: string; name: string };
 /**
  * What each provider will answer for, and which model to start on.
  *
+ * **The first entry of each list is that provider's default** — the model
+ * every reader is put on, and billed for, the moment they connect it (see
+ * `defaultModelFor` below, and `nextSelection` in
+ * `hooks/use-active-chat.tsx`). Order here is behaviour, not presentation:
+ * reordering a list for cosmetic reasons silently changes which model the
+ * app spends on. `models.test.ts` pins all seven defaults by id so that a
+ * reorder has to state the change it is making.
+ *
+ * That is not hypothetical. Gemini was listed Pro-first here while the
+ * predecessor playground lists `gemini-2.5-flash` first, and on Google's
+ * free Code Assist tier 2.5 Pro's quota is a small fraction of Flash's: the
+ * same account that worked there answered a one-token request here with
+ * "You have exhausted your capacity on this model". Nothing about the
+ * request was wrong; only the position of two strings.
+ *
  * This is the fallback used when a live listing isn't fetched (or the fetch
- * fails) — see `fetchModelsFor` below. It is also the only source for
- * Gemini, the one provider whose listing this app never even attempts:
+ * fails) — see `fetchModelsFor` below — but note that the default always
+ * comes from here even for the six providers whose list *is* fetched: a
+ * live listing replaces what the picker shows, never what a fresh
+ * connection starts on. It is also the only source for Gemini, the one
+ * provider whose listing this app never even attempts:
  *
  * Code Assist is RPC-shaped, not REST — there is no `/models` to ask
  * (that 404s), and the method that does exist for it,
@@ -28,17 +46,25 @@ const MODELS: Record<string, Model[]> = {
     { id: "claude-opus-4-1", name: "Claude Opus 4.1" },
     { id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
   ],
+  // Flash first: Pro's free-tier Code Assist quota is a small fraction of
+  // Flash's, so defaulting to Pro exhausts a free account immediately. This
+  // matches the predecessor playground's order.
   gemini: [
-    { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
     { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
+    { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
   ],
   "github-copilot": [
     { id: "gpt-4o", name: "GPT-4o" },
     { id: "claude-sonnet-4", name: "Claude Sonnet 4" },
   ],
+  // Codex first: `gpt-5-codex` is the only model the predecessor playground
+  // listed for this provider, and this surface is the Codex backend rather
+  // than the general API. The live listing (see `fetchCodexModelList`)
+  // replaces both entries for the picker; this order still decides what a
+  // fresh connection starts on.
   openai: [
-    { id: "gpt-5", name: "GPT-5" },
     { id: "gpt-5-codex", name: "GPT-5 Codex" },
+    { id: "gpt-5", name: "GPT-5" },
   ],
   openrouter: [
     { id: "anthropic/claude-sonnet-4.5", name: "Claude Sonnet 4.5" },
@@ -69,6 +95,14 @@ export function modelsFor(providerId: string): Model[] {
   return MODELS[providerId] ?? [];
 }
 
+/**
+ * The model a provider starts on: the first entry of its list in `MODELS`.
+ *
+ * Kept as "first entry wins" rather than a separate `default` field because
+ * a second field can disagree with the list it points into; the position
+ * cannot. What stops the position drifting is the pinned-defaults test in
+ * `models.test.ts` — see the note on `MODELS` for why that matters.
+ */
 export function defaultModelFor(providerId: string): string {
   return MODELS[providerId]?.[0]?.id ?? "";
 }
