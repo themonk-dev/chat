@@ -30,8 +30,16 @@ export function MessageAttribution({
   providerId: string;
 }) {
   return (
+    /*
+     * Foreground rather than muted, and that decides the logos too: five of the
+     * seven marks are drawn with `currentColor`, so under muted text they
+     * washed out while Claude's and Gemini's hard-coded brand fills stayed full
+     * strength — one line showing two different treatments. At foreground every
+     * mark carries the weight it has in the picker and the Manage Providers
+     * list, which is where a reader learns to recognise them.
+     */
     <p
-      className="flex items-center gap-1.5 text-[11px] text-muted-foreground/60"
+      className="flex items-center gap-1.5 text-[11px] text-foreground"
       data-testid="message-attribution"
     >
       <span>by</span>

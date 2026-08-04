@@ -40,7 +40,7 @@ const PureChatItem = ({
         // Every row carries the border so only its colour changes when the
         // selection moves. Drawing it on the active row alone would add a pixel
         // per side and nudge the whole list.
-        className="h-8 rounded-none border border-transparent text-[13px] text-sidebar-foreground/50 transition-all duration-150 hover:bg-transparent hover:text-sidebar-foreground data-active:bg-transparent data-active:font-normal data-active:text-sidebar-foreground/50 data-[active=true]:border-dashed data-[active=true]:border-sidebar-foreground/50 data-[active=true]:font-medium data-[active=true]:text-sidebar-foreground"
+        className="h-8 rounded-lg border border-transparent text-[13px] text-sidebar-foreground/50 transition-all duration-150 hover:bg-transparent hover:text-sidebar-foreground data-active:bg-transparent data-active:font-normal data-active:text-sidebar-foreground/50 data-[active=true]:border-dashed data-[active=true]:border-sidebar-foreground/50 data-[active=true]:font-medium data-[active=true]:text-sidebar-foreground"
         isActive={isActive}
       >
         <Link href={`/chat/${chat.id}`} onClick={closeMobile}>
