@@ -5,6 +5,7 @@ import { ExternalLinkIcon } from "lucide-react";
 import {
   type ChangeEvent,
   type KeyboardEvent,
+  type MouseEvent,
   useCallback,
   useEffect,
   useRef,
@@ -120,7 +121,7 @@ export function AuthDialog({
   onOpenChange: (open: boolean) => void;
   open: boolean;
 }) {
-  const { activeId, connect, pending, submitCode } = useProviderAuth();
+  const { activeId, cancel, connect, pending, submitCode } = useProviderAuth();
   const { flow, label, pasteHint } = registry[activeId];
   const Logo = providerLogos[activeId];
 
@@ -131,6 +132,87 @@ export function AuthDialog({
 
   const attemptRef = useRef(0);
   const deviceStartedRef = useRef(false);
+
+  /**
+   * The provider window this dialog opened, so it can be closed again once
+   * the poll comes back approved — the device flows' equivalent of what
+   * OpenRouter's popup already does for itself (`postCallbackToOpener` ends
+   * on `window.close()` because by then it is same-origin).
+   *
+   * A window opened by `window.open` may be closed by its opener whatever
+   * origin it has since navigated to; `close()` is one of the handful of
+   * operations that survives the cross-origin boundary. Nothing else about
+   * it is readable, so this cannot tell whether the reader wandered off to
+   * another page in that tab — closing the tab we opened, once the thing we
+   * opened it for is done, is the honest reading of that.
+   */
+  const verificationWindowRef = useRef<Window | null>(null);
+
+  /**
+   * Closes that window, if there is still one of ours to close.
+   *
+   * Every branch here is a real thing that happens, and none of them may
+   * turn into a failure: the reader can approve the code on their phone and
+   * never open a window at all (`null`), can close the tab themselves before
+   * the poll notices (`closed`), and a handle can be severed by the
+   * `Cross-Origin-Opener-Policy` the provider's own page sets, in which case
+   * `close()` is a no-op or throws depending on the engine. The sign-in has
+   * already succeeded by the time this runs, so nothing it does may be
+   * allowed to unwind that — hence the swallow.
+   */
+  const closeVerificationWindow = useCallback(() => {
+    const opened = verificationWindowRef.current;
+
+    verificationWindowRef.current = null;
+
+    if (!opened) {
+      return;
+    }
+
+    try {
+      if (!opened.closed) {
+        opened.close();
+      }
+    } catch {
+      // A window we cannot close is not a failed sign-in.
+    }
+  }, []);
+
+  /**
+   * Opens the verification page and keeps the handle.
+   *
+   * `window.open` rather than letting the anchor navigate, because an anchor
+   * hands back nothing to close later. The `rel="noopener noreferrer"` the
+   * anchor still carries is deliberately *not* passed here: `noopener` is
+   * precisely the feature that makes `window.open` return `null`, so there
+   * is no version of this that both severs the opener and keeps a handle.
+   * The page being opened is the provider's own verification page, at a URL
+   * that came from that provider over TLS.
+   *
+   * When there is no handle to be had — a popup blocker, a runtime that does
+   * not implement `open` — the click is left alone and the anchor's own
+   * `target="_blank"` does the navigating, exactly as it did before. Losing
+   * the convenience is fine; losing the sign-in is not.
+   */
+  const handleOpenVerification = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>) => {
+      let opened: Window | null = null;
+
+      try {
+        opened = window.open(event.currentTarget.href, "_blank");
+      } catch {
+        opened = null;
+      }
+
+      if (!opened) {
+        return;
+      }
+
+      event.preventDefault();
+      verificationWindowRef.current = opened;
+    },
+    []
+  );
 
   /**
    * Requests one device code. Guarded by `deviceStartedRef` so the mount
@@ -151,6 +233,8 @@ export function AuthDialog({
 
     connect()
       .then(() => {
+        closeVerificationWindow();
+
         if (attemptId === attemptRef.current) {
           onOpenChange(false);
         }
@@ -166,7 +250,7 @@ export function AuthDialog({
           setBusy(false);
         }
       });
-  }, [connect, onOpenChange]);
+  }, [closeVerificationWindow, connect, onOpenChange]);
 
   // Device is the one flow with no button to press: the code is only useful
   // once it exists, so the request goes out as soon as the dialog is open.
@@ -181,6 +265,53 @@ export function AuthDialog({
       startDevice();
     }
   }, [flow, open, startDevice]);
+
+  /**
+   * Whether this dialog has an attempt of its own to clean up when it
+   * closes — see the effect below for why that is a transition and not a
+   * cleanup function.
+   */
+  const wasOpenRef = useRef(false);
+
+  /**
+   * Closing the dialog abandons the attempt it started.
+   *
+   * A device poll runs for the fifteen-minute life of its code, one request
+   * every few seconds, and OpenAI's endpoint answers 403 until the code is
+   * approved — so an abandoned one is a 403 loop against a provider's auth
+   * endpoint with nothing left watching it. `setActiveId` used to be the
+   * only thing that could stop an attempt, and it is only reached when the
+   * dialog was opened for a provider other than the active one; the reader
+   * connecting the provider they are already on never went near it.
+   *
+   * Written as an open-to-closed transition rather than as the mount
+   * effect's cleanup on purpose. Cleanup also runs on every unmount —
+   * including StrictMode's development remount, where it would abort the
+   * attempt the mount had just started and force a second device-code
+   * request per open. `deviceStartedRef` already makes that remount a
+   * no-op; this keeps it one. Unmount-while-open is covered anyway: the
+   * only ones are `activeId` changing (which is `setActiveId`, which
+   * cancels) and `suggested-actions.tsx` swapping the notice out once
+   * connected (by which point the attempt has settled).
+   *
+   * The guard is also reset here, so a reopened dialog starts a fresh
+   * request rather than sitting on the "Requesting a device code..." line
+   * forever.
+   */
+  useEffect(() => {
+    if (open) {
+      wasOpenRef.current = true;
+      return;
+    }
+
+    if (!wasOpenRef.current) {
+      return;
+    }
+
+    wasOpenRef.current = false;
+    deviceStartedRef.current = false;
+    cancel();
+  }, [cancel, open]);
 
   const handlePopupContinue = useCallback(() => {
     setError(undefined);
@@ -354,7 +485,9 @@ export function AuthDialog({
                 </div>
                 <Button asChild variant="outline">
                   <a
+                    data-testid="device-verification-link"
                     href={pending.verificationUri}
+                    onClick={handleOpenVerification}
                     rel="noopener noreferrer"
                     target="_blank"
                   >
@@ -363,7 +496,8 @@ export function AuthDialog({
                   </a>
                 </Button>
                 <DialogDescription>
-                  This dialog closes on its own once you approve the code.
+                  This dialog closes on its own once you approve the code, and
+                  the page you opened closes with it.
                 </DialogDescription>
               </>
             ) : (
