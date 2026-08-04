@@ -1,4 +1,5 @@
 import type { TokenSet } from "@ai-oauth-sdk/browser";
+import { popupReceiver } from "@ai-oauth-sdk/browser";
 import {
   act,
   cleanup,
@@ -139,7 +140,38 @@ async function settle() {
 
 /** The parts of a `WindowProxy` this component is allowed to touch. */
 function fakeWindow(closed = false) {
-  return { close: vi.fn(), closed };
+  return { close: vi.fn(), closed, focus: vi.fn() };
+}
+
+/**
+ * The exact window features `popupReceiver` passes to `window.open`, taken
+ * from the receiver itself rather than restated as a literal here.
+ *
+ * The owner's request was that the device flows open "just like what we do
+ * for openrouter", and OpenRouter's window is opened by that receiver — so
+ * the honest assertion is that the two calls agree, not that ours matches a
+ * string a test author copied across once and could not keep in step. This
+ * drives the real receiver (this file never mocks the SDK) the way
+ * `AuthClient.login()` does, and reads the third argument back off the spy.
+ */
+async function popupReceiverFeatures(): Promise<string> {
+  const opened = fakeWindow();
+  const open = vi
+    .spyOn(window, "open")
+    .mockReturnValue(opened as unknown as Window);
+
+  const started = await popupReceiver().start({
+    provider: { id: "openrouter" },
+  } as never);
+
+  await started.present("https://example.com/authorize");
+
+  const features = String(open.mock.calls[0]?.[2]);
+
+  await started.close();
+  open.mockRestore();
+
+  return features;
 }
 
 async function openDialogForQwen(
@@ -186,7 +218,11 @@ describe("closing the provider window after a device flow", () => {
 
     fireEvent.click(screen.getByTestId("device-verification-link"));
 
-    expect(open).toHaveBeenCalledWith("https://chat.qwen.ai/device", "_blank");
+    expect(open).toHaveBeenCalledWith(
+      "https://chat.qwen.ai/device",
+      "aioauth-verify-qwen",
+      expect.stringContaining("popup=yes")
+    );
 
     act(() => device.approve());
     await settle();
@@ -286,6 +322,126 @@ describe("closing the provider window after a device flow", () => {
 
     expect(opened.close).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("device-code")).toBeNull();
+  });
+});
+
+describe("opening a device verification page", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * The owner's request, in their words: "can we open copilot, x and chatgpt
+   * in a new pop up with a loader not tab, just like what we do for
+   * openrouter". A full tab pushes the app out of view and leaves the reader
+   * to find their way back; the popup keeps the dialog — and the code — on
+   * screen beside it.
+   *
+   * "Just like" is asserted against `popupReceiver`'s own call rather than
+   * against numbers restated here, so the two windows cannot drift apart.
+   */
+  it("opens the verification page in a popup shaped exactly like the one popupReceiver opens", async () => {
+    const features = await popupReceiverFeatures();
+    const opened = fakeWindow();
+    const open = vi
+      .spyOn(window, "open")
+      .mockReturnValue(opened as unknown as Window);
+    const device = deferredDeviceClient();
+
+    await openDialogForQwen(device);
+
+    fireEvent.click(screen.getByTestId("device-verification-link"));
+
+    expect(open).toHaveBeenCalledWith(
+      "https://chat.qwen.ai/device",
+      expect.any(String),
+      features
+    );
+    expect(features).toMatch(
+      /^popup=yes,width=\d+,height=\d+,left=\d+,top=\d+$/
+    );
+  });
+
+  /**
+   * A stable window name is what makes a second click reuse the window that
+   * is already open instead of stacking another beside it — the same trade
+   * `use-provider-auth.tsx`'s `tabNameFor` makes for the paste flow. `_blank`
+   * (what this used to pass) opts out of exactly that.
+   */
+  it("reuses one named window per provider rather than stacking new ones", async () => {
+    const opened = fakeWindow();
+    const open = vi
+      .spyOn(window, "open")
+      .mockReturnValue(opened as unknown as Window);
+    const device = deferredDeviceClient();
+
+    await openDialogForQwen(device);
+
+    fireEvent.click(screen.getByTestId("device-verification-link"));
+    fireEvent.click(screen.getByTestId("device-verification-link"));
+
+    expect(open.mock.calls.map((call) => call[1])).toEqual([
+      "aioauth-verify-qwen",
+      "aioauth-verify-qwen",
+    ]);
+  });
+
+  /**
+   * The "with a loader" half of the request. There is nothing to load in the
+   * popup that this page could speak for — it is the provider's own page,
+   * cross-origin — so the loader belongs where the truth is: the dialog,
+   * which is genuinely polling the provider every few seconds until the code
+   * is approved. It appears only once a window has actually been opened,
+   * because before that the reader is the one being waited on, not us.
+   */
+  it("shows a waiting indicator only once the verification window is open", async () => {
+    const opened = fakeWindow();
+
+    vi.spyOn(window, "open").mockReturnValue(opened as unknown as Window);
+
+    const device = deferredDeviceClient();
+
+    await openDialogForQwen(device);
+
+    expect(screen.queryByTestId("device-waiting")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("device-verification-link"));
+    await settle();
+
+    const waiting = screen.getByTestId("device-waiting");
+
+    expect(waiting.textContent).toMatch(/waiting/i);
+    expect(waiting.querySelector('[role="status"]')).toBeTruthy();
+    expect(screen.getByTestId("device-verification-link").textContent).toMatch(
+      /reopen/i
+    );
+  });
+
+  /**
+   * A popup blocker hands back no handle, and the anchor's own
+   * `target="_blank"` is left to do the navigating — the reader gets a tab,
+   * which is worse but works. Claiming to be waiting on a window that was
+   * never opened would be the lie the loader must not tell.
+   */
+  it("claims no window when the popup was blocked", async () => {
+    vi.spyOn(window, "open").mockReturnValue(null);
+
+    const device = deferredDeviceClient();
+
+    await openDialogForQwen(device);
+
+    const link = screen.getByTestId("device-verification-link");
+    const defaultPrevented = !fireEvent.click(link);
+
+    await settle();
+
+    expect(defaultPrevented).toBe(false);
+    expect(screen.queryByTestId("device-waiting")).toBeNull();
   });
 });
 
