@@ -3,6 +3,7 @@ import { convertToModelMessages, streamText } from "ai";
 import { getWeather } from "@/lib/ai/tools/get-weather";
 import type { ChatMessage } from "@/lib/types";
 import { CLAUDE_SYSTEM, modelFor } from "./adapters";
+import { registry } from "./registry";
 
 type Resolve = () => {
   accessToken: string | undefined;
@@ -34,8 +35,18 @@ export class OAuthChatTransport implements ChatTransport<ChatMessage> {
   > {
     const { accessToken, modelId, providerId } = this.#resolve();
 
+    /*
+     * Named, not generic. The state that actually produces this is a
+     * selection whose *owner* has no token — which the reader typically
+     * reaches with one or more other providers still connected, so "connect
+     * a provider" reads as a lie about a popover that says "2 connected".
+     * `providerId` is the model's owner (see `resolveRequest`), so it is
+     * exactly the provider they have to sign into for this send to work.
+     */
     if (!accessToken) {
-      throw new Error("Connect a provider before sending a message.");
+      const label = registry[providerId]?.label ?? providerId;
+
+      throw new Error(`Connect ${label} before sending this model's messages.`);
     }
 
     // In the installed AI SDK version, `convertToModelMessages` is async

@@ -61,4 +61,29 @@ describe("OAuthChatTransport", () => {
       expect.objectContaining({ abortSignal: controller.signal })
     );
   });
+
+  /**
+   * The state that reaches this branch is a selection whose *owner* holds no
+   * token — which a reader normally hits with other providers still
+   * connected, so a generic "connect a provider" describes the wrong fact
+   * about the app they are looking at. `providerId` is the owner
+   * (`resolveRequest` derives it), so it is the one thing worth saying.
+   */
+  it("names the model's owner when that owner has no token", async () => {
+    const transport = new OAuthChatTransport(() => ({
+      accessToken: undefined,
+      modelId: "claude-sonnet-4-5",
+      providerId: "claude",
+    }));
+
+    await expect(
+      transport.sendMessages({
+        abortSignal: undefined,
+        chatId: "chat-1",
+        messageId: undefined,
+        messages: [],
+        trigger: "submit-message",
+      })
+    ).rejects.toThrow("Connect Claude before sending this model's messages.");
+  });
 });
