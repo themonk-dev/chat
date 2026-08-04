@@ -54,6 +54,15 @@ function unsafeToDisplay(text: string): boolean {
  * routine cancellation into console noise (and, in dev, a Next.js overlay)
  * on every single cancel.
  *
+ * This one check is enough because `connect()` guarantees it is: cancellation
+ * does not arrive here in whatever shape the abort happened to interrupt —
+ * a bare `AbortError` `DOMException` from `fetch` when a device poll was on
+ * the wire, an `OAuthError` when it was between polls — because
+ * `use-provider-auth.tsx`'s `asCancellation` has already resolved that from
+ * the `AbortController` it owns. Nothing here should ever go back to
+ * classifying cancellation by inspecting the error; that is what let the
+ * `DOMException` case through twice.
+ *
  * Every other error still goes to `console.error` in full and is shown
  * verbatim unless it independently trips `unsafeToDisplay` — a defensive
  * backstop for any future code path this reasoning does not cover, not the

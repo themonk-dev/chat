@@ -1,4 +1,5 @@
 import type { TokenSet } from "@ai-oauth-sdk/browser";
+import { isOAuthError, OAuthError } from "@ai-oauth-sdk/browser";
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clientFor } from "@/lib/oauth/storage";
@@ -300,6 +301,117 @@ describe("useProviderAuth", () => {
     expect(result.current.activeId).toBe("xai");
     expect(result.current.tokens).toBeUndefined();
     expect(result.current.isConnected).toBe(false);
+  });
+
+  /**
+   * The contract `components/chat/auth-dialog.cancellation.test.tsx` leans
+   * on, pinned at the boundary that provides it.
+   *
+   * A cancelled attempt does not reject with one predictable thing: whatever
+   * the abort interrupts is what surfaces, and a request already on the wire
+   * is killed by `fetch` itself, which raises a bare `AbortError` that never
+   * passes through SDK code and so carries none of its markings. Callers
+   * cannot tell that apart from a genuine failure by looking, and used not
+   * to. `connect()` is where the `AbortController` lives, so `connect()` is
+   * where it is settled: everything raised under an aborted signal leaves as
+   * the SDK's own `aborted` error, whatever it arrived as.
+   */
+  it("rejects a cancelled attempt as the SDK's own aborted error, whatever the abort actually raised", async () => {
+    // Exactly what `fetch` rejects with mid-request. Not `new
+    // DOMException(...)`: jsdom's descends from the jsdom window's `Error`
+    // rather than this realm's, so `instanceof Error` is false for it here
+    // and true in every browser — it would model the wrong thing.
+    const rawAbort = new Error("signal is aborted without reason");
+    rawAbort.name = "AbortError";
+
+    const grokClient = makeClient({
+      deviceLogin: vi.fn().mockImplementation(
+        (options) =>
+          new Promise((_resolve, reject) => {
+            options.onCode({
+              userCode: "ABCD-1234",
+              verificationUri: "https://x.ai/device",
+            });
+            options.signal.addEventListener("abort", () => reject(rawAbort), {
+              once: true,
+            });
+          })
+      ),
+    });
+    const openrouterClient = makeClient();
+
+    const clients: Record<string, FakeClient> = {
+      openrouter: openrouterClient,
+      xai: grokClient,
+    };
+    vi.mocked(clientFor).mockImplementation(
+      (id: string) => clients[id] as never
+    );
+
+    const { result } = renderHook(() => useProviderAuth(), {
+      wrapper: ProviderAuthProvider,
+    });
+
+    act(() => {
+      result.current.setActiveId("xai");
+    });
+
+    let connectPromise!: Promise<void>;
+    act(() => {
+      connectPromise = result.current.connect();
+    });
+    expect(result.current.pending?.kind).toBe("device");
+
+    // Cancel, the way manage-providers.tsx's restore effect does.
+    act(() => {
+      result.current.setActiveId("openrouter");
+    });
+
+    const caught = await act(() => connectPromise.catch((error) => error));
+
+    expect(isOAuthError(caught)).toBe(true);
+    expect((caught as OAuthError).code).toBe("aborted");
+    expect(result.current.pending).toBeUndefined();
+  });
+
+  /**
+   * The other half of that classification, and the reason it is keyed off
+   * the controller rather than the error: nothing was cancelled here, so the
+   * failure the provider actually reported comes back untouched, for the
+   * dialog to show and log.
+   */
+  it("leaves a genuine failure alone when nothing cancelled the attempt", async () => {
+    const failure = new OAuthError(
+      "device_flow_failed",
+      "Device authorization request failed (HTTP 502).",
+      { status: 502 }
+    );
+    const grokClient = makeClient({
+      deviceLogin: vi.fn().mockRejectedValue(failure),
+    });
+    const openrouterClient = makeClient();
+
+    const clients: Record<string, FakeClient> = {
+      openrouter: openrouterClient,
+      xai: grokClient,
+    };
+    vi.mocked(clientFor).mockImplementation(
+      (id: string) => clients[id] as never
+    );
+
+    const { result } = renderHook(() => useProviderAuth(), {
+      wrapper: ProviderAuthProvider,
+    });
+
+    act(() => {
+      result.current.setActiveId("xai");
+    });
+
+    const caught = await act(() =>
+      result.current.connect().catch((error) => error)
+    );
+
+    expect(caught).toBe(failure);
   });
 
   /**
