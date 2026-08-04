@@ -5,30 +5,43 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 import "./globals.css";
 
-const TITLE = "Chat with every AI provider in one place";
-const DESCRIPTION =
-  "Sign in with your own OpenRouter, ChatGPT, Claude, Gemini, Grok, GitHub Copilot, or Qwen account and start chatting right away. No signup, no API keys to paste — your OAuth token stays in this browser tab and chat history stays in local storage. Nothing is sent to or stored on our servers.";
-const SHORT_DESCRIPTION =
-  "One place to chat with seven AI providers using your own accounts. No signup, no API keys, nothing stored on our servers.";
+const SITE_NAME = "chat.themonk.dev";
 const SITE_URL = "https://chat.themonk.dev";
+const TITLE = "chat.themonk.dev — one chat, every AI subscription";
+const DESCRIPTION =
+  "Chat with ChatGPT, Claude, Gemini, Grok and more using the plans you already pay for. Switch provider mid-conversation. No API keys.";
+const TWITTER_DESCRIPTION =
+  "Use the AI plans you already pay for. Switch provider mid-conversation. No API keys.";
+const OG_IMAGE_ALT = "Every AI subscription you pay for. One chat window.";
 
 /**
- * Neither block sets `images`: `app/opengraph-image.tsx` uses Next's file
- * convention, which auto-populates both from that one route.
+ * `/og.png` is a rewrite onto `app/og/route.tsx` (see next.config.ts), so a
+ * static `public/og.png` can take over later without touching these tags.
  */
+const OG_IMAGE = {
+  alt: OG_IMAGE_ALT,
+  height: 630,
+  url: "/og.png",
+  width: 1200,
+};
+
 export const metadata: Metadata = {
+  alternates: { canonical: SITE_URL },
   description: DESCRIPTION,
   metadataBase: new URL(SITE_URL),
   openGraph: {
-    description: SHORT_DESCRIPTION,
+    description: DESCRIPTION,
+    images: [OG_IMAGE],
+    siteName: SITE_NAME,
     title: TITLE,
     type: "website",
     url: SITE_URL,
   },
   title: TITLE,
   twitter: {
-    card: "summary",
-    description: SHORT_DESCRIPTION,
+    card: "summary_large_image",
+    description: TWITTER_DESCRIPTION,
+    images: [OG_IMAGE],
     title: TITLE,
   },
 };

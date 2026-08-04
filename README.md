@@ -1,5 +1,5 @@
 <a href="https://chat.themonk.dev">
-  <img alt="Chat with every AI provider in one place" src="https://chat.themonk.dev/opengraph-image">
+  <img alt="Chat with every AI provider in one place" src="https://chat.themonk.dev/og.png">
   <h1 align="center">Chat</h1>
 </a>
 

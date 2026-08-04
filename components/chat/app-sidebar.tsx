@@ -1,6 +1,6 @@
 "use client";
 
-import { MessageSquareIcon, PanelLeftIcon, PenSquareIcon } from "lucide-react";
+import { MessagesSquareIcon, PanelLeftIcon, PenSquareIcon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback } from "react";
@@ -51,7 +51,7 @@ export function AppSidebar() {
                 tooltip="Chatbot"
               >
                 <Link href="/" onClick={closeMobile}>
-                  <MessageSquareIcon className="size-4 text-sidebar-foreground/50" />
+                  <MessagesSquareIcon className="size-4 text-sidebar-foreground/50" />
                 </Link>
               </SidebarMenuButton>
               <Tooltip>
