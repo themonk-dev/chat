@@ -1,6 +1,6 @@
 "use client";
 
-import { PanelLeftIcon } from "lucide-react";
+import { ExternalLinkIcon, PanelLeftIcon } from "lucide-react";
 import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -34,7 +34,10 @@ function PureChatHeader() {
         target="_blank"
       >
         built by{" "}
-        <span className="underline underline-offset-2">themonk.dev</span>
+        <span className="inline-flex items-center gap-0.5 underline underline-offset-2">
+          themonk.dev
+          <ExternalLinkIcon className="size-3" />
+        </span>
       </a>
     </header>
   );
