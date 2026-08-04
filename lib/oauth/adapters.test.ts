@@ -2,6 +2,7 @@ import type { TokenSet } from "@ai-oauth-sdk/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type CodexOptions = {
+  baseURL?: string;
   fetch?: typeof fetch;
   headers?: Record<string, string>;
 };
@@ -9,10 +10,46 @@ type CodexOptions = {
 const createOpenAIMock = vi.fn((_options: CodexOptions) => ({
   responses: vi.fn(() => "codex-model"),
 }));
+const createOpenAICompatibleMock = vi.fn((_options: CodexOptions) => ({
+  chatModel: vi.fn(() => "compatible-model"),
+}));
+const createAnthropicMock = vi.fn(
+  (_options: CodexOptions) => () => "claude-model"
+);
+const createGoogleMock = vi.fn(
+  (_options: CodexOptions) => () => "gemini-model"
+);
+const createOpenRouterMock = vi.fn((_options: CodexOptions) => ({
+  chat: vi.fn(() => "openrouter-model"),
+}));
 const getTokensMock = vi.fn<() => Promise<TokenSet | undefined>>();
 
 vi.mock("@ai-sdk/openai", () => ({
   createOpenAI: (options: CodexOptions) => createOpenAIMock(options),
+}));
+
+vi.mock("@ai-sdk/openai-compatible", () => ({
+  createOpenAICompatible: (options: CodexOptions) =>
+    createOpenAICompatibleMock(options),
+}));
+
+vi.mock("@ai-sdk/anthropic", () => ({
+  createAnthropic: (options: CodexOptions) => createAnthropicMock(options),
+}));
+
+vi.mock("@ai-sdk/google", () => ({
+  createGoogleGenerativeAI: (options: CodexOptions) =>
+    createGoogleMock(options),
+}));
+
+vi.mock("@openrouter/ai-sdk-provider", () => ({
+  createOpenRouter: (options: CodexOptions) => createOpenRouterMock(options),
+}));
+
+// Gemini is the one adapter that cannot produce a model without a network
+// round trip first; nothing here is about that round trip.
+vi.mock("./gemini-project", () => ({
+  resolveGeminiProject: () => Promise.resolve("projects/test-project"),
 }));
 
 vi.mock("./storage", () => ({
@@ -99,7 +136,7 @@ describe("modelFor", () => {
      */
     async function codexRequest(
       sent: Record<string, unknown>,
-      path = "/api/upstream/openai/responses"
+      path = `${window.location.origin}/api/upstream/openai/responses`
     ): Promise<{
       body: Record<string, unknown>;
       url: string;
@@ -208,7 +245,7 @@ describe("modelFor", () => {
       // descriptor rather than re-deriving it keeps that guard.
       const { body } = await codexRequest(
         { model: "gpt-5.5" },
-        "/api/upstream/openai/models"
+        `${window.location.origin}/api/upstream/openai/models`
       );
 
       expect(body).toEqual({ model: "gpt-5.5" });
@@ -283,6 +320,94 @@ describe("modelFor", () => {
         expect(exchangeCredential).toHaveBeenCalledTimes(2);
       } finally {
         proxiedProviders["github-copilot"].exchangeCredential = original;
+      }
+    });
+  });
+
+  /**
+   * Every adapter's `baseURL`, in one place, because the failure mode is not
+   * per-provider and the survivors were surviving by luck.
+   *
+   * All six bases used to be root-relative paths. `@ai-sdk/openai-compatible`
+   * builds its request URL with `new URL(`${baseURL}${path}`)`, which throws
+   * `TypeError: Failed to construct 'URL': Invalid URL` on a relative base —
+   * so Grok, Qwen and Copilot failed on the first request of every message,
+   * before anything left the browser. The other four concatenate strings and
+   * happened to work: `@ai-sdk/openai`, `@ai-sdk/anthropic` and OpenRouter's
+   * provider all build `${baseURL}${path}` by hand, and `@ai-sdk/google` the
+   * same. That is a property of four dependencies' current internals, not a
+   * contract, and the next upgrade can turn any of them into the crash above.
+   *
+   * So this asserts the property that actually holds — an absolute URL on
+   * the page's own origin — for all seven ids, rather than only for the
+   * three that were observed throwing.
+   */
+  describe("proxy base URLs", () => {
+    async function basesByProvider(): Promise<Record<string, string>> {
+      const exchangeCredential = vi.fn(async () => ({
+        accessToken: "copilot-short-lived",
+        expiresAt: Date.now() + 10 * 60_000,
+        headers: {},
+      }));
+      const original = proxiedProviders["github-copilot"].exchangeCredential;
+      proxiedProviders["github-copilot"].exchangeCredential =
+        exchangeCredential;
+
+      createOpenAIMock.mockClear();
+      createOpenAICompatibleMock.mockClear();
+      createAnthropicMock.mockClear();
+      createGoogleMock.mockClear();
+      createOpenRouterMock.mockClear();
+      getTokensMock.mockResolvedValue(undefined);
+
+      try {
+        await modelFor("openrouter", "model", "token");
+        await modelFor("claude", "model", "token");
+        await modelFor("openai", "model", "token");
+        await modelFor("gemini", "model", "token");
+        await modelFor("xai", "model", "token");
+        await modelFor("qwen", "model", "token");
+        await modelFor("github-copilot", "model", "ghu_base_url");
+      } finally {
+        proxiedProviders["github-copilot"].exchangeCredential = original;
+      }
+
+      const compatible = createOpenAICompatibleMock.mock.calls.map(
+        ([options]) => options
+      );
+
+      return {
+        claude: String(createAnthropicMock.mock.calls.at(0)?.[0].baseURL),
+        gemini: String(createGoogleMock.mock.calls.at(0)?.[0].baseURL),
+        "github-copilot": String(compatible.at(2)?.baseURL),
+        openai: String(createOpenAIMock.mock.calls.at(0)?.[0].baseURL),
+        openrouter: String(createOpenRouterMock.mock.calls.at(0)?.[0].baseURL),
+        qwen: String(compatible.at(1)?.baseURL),
+        xai: String(compatible.at(0)?.baseURL),
+      };
+    }
+
+    it("points every adapter at an absolute base on this page's origin", async () => {
+      const { origin } = window.location;
+
+      expect(await basesByProvider()).toEqual({
+        claude: `${origin}/api/upstream/claude`,
+        gemini: `${origin}/api/upstream/gemini/v1internal`,
+        "github-copilot": `${origin}/api/upstream/github-copilot`,
+        openai: `${origin}/api/upstream/openai`,
+        openrouter: `${origin}/api/upstream/openrouter`,
+        qwen: `${origin}/api/upstream/qwen`,
+        xai: `${origin}/api/upstream/xai`,
+      });
+    });
+
+    it("gives every base to the exact expression that threw", async () => {
+      // `openai-compatible-provider.ts:157`, verbatim. A relative base makes
+      // this throw before a request is ever made.
+      const bases = Object.values(await basesByProvider());
+
+      for (const base of bases) {
+        expect(() => new URL(`${base}/chat/completions`)).not.toThrow();
       }
     });
   });

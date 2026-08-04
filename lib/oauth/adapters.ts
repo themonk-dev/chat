@@ -25,6 +25,43 @@ export const CLAUDE_SYSTEM =
   "You are Claude Code, Anthropic's official CLI for Claude.";
 
 /**
+ * The closed same-origin proxy's base for one provider, absolute.
+ *
+ * Absolute, and not merely as a matter of taste. `@ai-sdk/openai-compatible`
+ * builds its request URL as ``new URL(`${baseURL}${path}`)``, and `new URL`
+ * throws `TypeError: Failed to construct 'URL': Invalid URL` when handed a
+ * root-relative base — so with `/api/upstream/xai` the Grok, Qwen and
+ * Copilot adapters failed on the first request of every message, before
+ * anything reached the network. The other four (`@ai-sdk/openai`,
+ * `@ai-sdk/anthropic`, `@ai-sdk/google`, OpenRouter's provider) concatenate
+ * strings instead and so worked by luck, which is not a difference worth
+ * preserving: one helper puts all seven on the same contract, and the next
+ * dependency that switches to `new URL` cannot reintroduce this.
+ *
+ * The origin is read from the page at call time rather than configured,
+ * which is what makes the same build correct on localhost, on a Vercel
+ * preview URL and on the production host. This deliberately does not prepend
+ * `NEXT_PUBLIC_BASE_PATH`: the proxy route is reached at `/api/upstream/...`
+ * from the origin root today (see `lib/oauth/models.ts` and
+ * `lib/oauth/gemini-project.ts`, which fetch it that way), and this changes
+ * how the URL is *spelled*, not where it points.
+ *
+ * `modelFor` is only ever called from the browser — `sendMessages` in
+ * `./transport`, inside a `ChatTransport` — so there is no correct origin to
+ * fall back to on a server, and inventing one would send a reader's token to
+ * whatever host that guess named. Saying so is the safer failure.
+ */
+function upstreamBase(path: string): string {
+  if (typeof window === "undefined") {
+    throw new Error(
+      `Cannot resolve the proxy base for ${path} outside the browser: it is derived from the page's own origin.`
+    );
+  }
+
+  return `${window.location.origin}/api/upstream/${path}`;
+}
+
+/**
  * Builds an AI SDK model for a provider, pointed at our own proxy.
  *
  * The token is supplied here, in the browser, and travels as an `Authorization`
@@ -53,14 +90,14 @@ export async function modelFor(
   if (id === "openrouter") {
     return createOpenRouter({
       apiKey: accessToken,
-      baseURL: "/api/upstream/openrouter",
+      baseURL: upstreamBase("openrouter"),
       fetch: withSseTailFlush(),
     }).chat(modelId);
   }
 
   if (id === "xai" || id === "qwen") {
     return createOpenAICompatible({
-      baseURL: `/api/upstream/${id}`,
+      baseURL: upstreamBase(id),
       fetch: withSseTailFlush(),
       headers: { authorization: `Bearer ${accessToken}` },
       name: id,
@@ -76,7 +113,7 @@ export async function modelFor(
 
     return createAnthropic({
       authToken: accessToken,
-      baseURL: "/api/upstream/claude",
+      baseURL: upstreamBase("claude"),
       fetch: withSseTailFlush(),
       // Claude's own descriptor already knows what an OAuth-bearer request
       // needs (the API version, and the beta flag that opts into accepting
@@ -90,7 +127,7 @@ export async function modelFor(
 
     return createOpenAI({
       apiKey: accessToken,
-      baseURL: "/api/upstream/openai",
+      baseURL: upstreamBase("openai"),
       fetch: codexFetch(tokens, withSseTailFlush()),
       // The descriptor's apiHeaders also supplies chatgpt-account-id when
       // the token names one — a subscription token has to name the account
@@ -109,7 +146,7 @@ export async function modelFor(
       // value is discarded by `withoutApiKeyHeader` below rather than read —
       // it only exists to satisfy the SDK's own validation.
       apiKey: "unused",
-      baseURL: "/api/upstream/gemini/v1internal",
+      baseURL: upstreamBase("gemini/v1internal"),
       // Outermost, so it sees the stream `wrapCodeAssist` has already
       // unwrapped — the terminator has to land on what the SDK's parser
       // actually reads, not on the enveloped bytes underneath it.
@@ -172,7 +209,7 @@ async function copilotModel(
   const credential = await copilotCredentialFor(accessToken);
 
   return createOpenAICompatible({
-    baseURL: "/api/upstream/github-copilot",
+    baseURL: upstreamBase("github-copilot"),
     fetch: withSseTailFlush(),
     headers: {
       authorization: `Bearer ${credential.accessToken}`,
