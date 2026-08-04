@@ -1,4 +1,7 @@
 import { fetchCodexModels } from "@ai-oauth-sdk/browser";
+import type { TokenSet } from "@ai-oauth-sdk/core";
+import { copilotCredentialFor } from "@/lib/oauth/copilot";
+import { proxiedProviders } from "@/lib/oauth/providers";
 import { clientFor } from "@/lib/oauth/storage";
 
 export type Model = { id: string; name: string };
@@ -104,35 +107,63 @@ function sortByName(models: Model[]): Model[] {
 }
 
 /**
- * Headers a provider's listing request needs beyond the bearer token.
+ * The full request headers a provider's listing needs — bearer token included,
+ * because for one provider the token itself is not the one in hand.
  *
- * Copilot's chat/completions and its `/models` listing both expect the
- * short-lived token `exchangeForCopilotToken` produces, not the raw GitHub
- * OAuth token this app currently has in hand — that exchange is the other
- * task's `lib/oauth/adapters.ts` to wire up. Sent with just the GitHub token,
- * this request most likely 401s, which `fetchModelsFor` treats the same as
- * any other failure: fall back to the static list. The headers are supplied
- * anyway so the call is ready the moment the token it needs exists.
+ * Copilot's `/models` sits behind the same gate as its chat/completions: it
+ * accepts the short-lived credential `exchangeForCopilotToken` produces, not
+ * the raw `ghu_` GitHub OAuth token. Sending the `ghu_` token 401s, and
+ * `fetchModelsFor` swallows a 401 the same as any other failure — so the
+ * picker silently showed the two-entry static fallback forever while sending
+ * worked fine against models the user could not select. The chat path already
+ * exchanges correctly (`lib/oauth/adapters.ts`); this one did not, which is
+ * why the exchange lives in `./copilot` where both can share one cache. The
+ * predecessor playground had no such split: it drove the listing through
+ * `createAuthenticatedFetch`, which applies `exchangeCredential` itself.
  *
- * Claude's API requires `anthropic-version` on every endpoint, and an
- * OAuth-bearer request additionally needs to opt into the beta that allows
- * it at all — the same two headers the Messages API needs, since `/models`
- * sits behind the same gate.
+ * Claude's headers come off its descriptor rather than being written out
+ * here for the same reason `adapters.ts` reads them there — the descriptor
+ * already knows that the Messages API needs a version header and that an
+ * OAuth-bearer request has to opt into the beta that permits `Authorization`
+ * at all, and `/models` sits behind that identical gate. Two hand-copied
+ * headers is exactly how the Copilot bug above stayed invisible.
  */
-function headersFor(providerId: string): Record<string, string> {
+async function requestHeadersFor(
+  providerId: string,
+  accessToken: string
+): Promise<Record<string, string>> {
   if (providerId === "github-copilot") {
+    const credential = await copilotCredentialFor(accessToken);
+
     return {
-      "Copilot-Integration-Id": "vscode-chat",
-      "Editor-Version": "vscode/1.95.0",
+      authorization: `Bearer ${credential.accessToken}`,
+      ...credential.headers,
     };
   }
+
+  const authorization = { authorization: `Bearer ${accessToken}` };
+
   if (providerId === "claude") {
     return {
-      "anthropic-beta": "oauth-2025-04-20",
-      "anthropic-version": "2023-06-01",
+      ...authorization,
+      ...proxiedProviders.claude.apiHeaders?.(
+        stubTokens("claude", accessToken)
+      ),
     };
   }
-  return {};
+
+  return authorization;
+}
+
+/**
+ * A minimal `TokenSet` for descriptor hooks that only need the bearer.
+ *
+ * Claude's `apiHeaders` ignores its argument entirely (its two headers are
+ * constants), so nothing is lost by not reading storage here the way
+ * `adapters.ts` must for Codex's `accountId`.
+ */
+function stubTokens(provider: string, accessToken: string): TokenSet {
+  return { accessToken, provider, raw: {}, tokenType: "bearer" };
 }
 
 /**
@@ -156,9 +187,10 @@ async function fetchCodexModelList(): Promise<Model[]> {
 /**
  * Fetches a provider's live model list, falling back to the static list on
  * any failure — no token, an unfetchable provider, a network error, a
- * non-2xx response, a thrown error, or a body this app can't parse. A wrong
- * or missing model list should never be the reason sending a message fails;
- * only an actually wrong model id sent to the provider should be.
+ * non-2xx response, a failed Copilot credential exchange, a thrown error, or
+ * a body this app can't parse. A wrong or missing model list should never be
+ * the reason sending a message fails; only an actually wrong model id sent to
+ * the provider should be.
  *
  * Every path here is keyed by `providerId`, and Codex's delegates to a
  * client independently looked up by that same id — the token used to
@@ -182,10 +214,7 @@ export async function fetchModelsFor(
     }
 
     const response = await fetch(`/api/upstream/${providerId}/models`, {
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-        ...headersFor(providerId),
-      },
+      headers: await requestHeadersFor(providerId, accessToken),
     });
 
     if (!response.ok) {
