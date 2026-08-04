@@ -51,7 +51,7 @@ import {
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { StopIcon } from "./icons";
-import { providerLogos } from "./provider-logos";
+import { ProviderMark } from "./provider-mark";
 import {
   type SlashCommand,
   SlashCommandMenu,
@@ -588,40 +588,14 @@ function itemValue(providerId: string, model: Model): string {
   return `${model.name} ${registry[providerId].label} ${providerId}:${model.id}`;
 }
 
-/**
- * The provider mark shown on every row, not just the group heading: two
- * connected providers can resell the same underlying model under the same
- * display name (GitHub Copilot and OpenRouter both carry "Claude Sonnet
- * 4.5"), and cmdk's search collapses the grouping that would otherwise
- * disambiguate them. `providerLogos`' SVGs are `aria-hidden` by design — they
- * are normally read beside a visible text label — but a row's mark can be
- * the only provider signal left once the list is filtered, so it gets its
- * own accessible name via a wrapping `role="img"` rather than inheriting the
- * hidden state from the SVG it wraps.
+/*
+ * The mark is shown on every row, not just the group heading: two connected
+ * providers can resell the same underlying model under the same display name
+ * (GitHub Copilot and OpenRouter both carry "Claude Sonnet 4.5"), and cmdk's
+ * search collapses the grouping that would otherwise disambiguate them. It now
+ * lives in `./provider-mark`, shared with the attribution line under a reply so
+ * the same provider reads the same way in both places.
  */
-function ProviderMark({
-  className,
-  providerId,
-}: {
-  className?: string;
-  providerId: string;
-}) {
-  const Logo = providerLogos[providerId];
-
-  if (!Logo) {
-    return null;
-  }
-
-  return (
-    <span
-      aria-label={`${registry[providerId].label} logo`}
-      className="inline-flex shrink-0 items-center"
-      role="img"
-    >
-      <Logo className={className ?? "size-4"} />
-    </span>
-  );
-}
 
 function ModelSelectorOption({
   model,

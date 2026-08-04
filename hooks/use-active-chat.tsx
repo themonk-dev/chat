@@ -21,7 +21,7 @@ import { toast } from "@/components/chat/toast";
 import { useProviderAuth } from "@/hooks/use-provider-auth";
 import { deleteChat, readChat, writeChat } from "@/lib/chats/store";
 import { ChatbotError, describeSendFailure } from "@/lib/errors";
-import { defaultModelFor, modelsFor } from "@/lib/oauth/models";
+import { defaultModelFor, modelNameFor } from "@/lib/oauth/models";
 import { PROVIDER_ORDER, registry } from "@/lib/oauth/registry";
 import { clientFor } from "@/lib/oauth/storage";
 import { OAuthChatTransport } from "@/lib/oauth/transport";
@@ -407,10 +407,16 @@ export function resolveRequest({
  * partial is not the error — the reader needs to see both, in the order they
  * happened.
  *
- * The model name comes from the static catalogue and falls back to the raw
- * slug, which is the honest answer for a model that was picked from a live
- * listing this build has never heard of: a slug names the model, and inventing
- * a prettier one would not.
+ * The model name comes from `modelNameFor` — the static catalogue, falling back
+ * to the raw slug — which is also what the attribution line under a successful
+ * reply uses, so the two cannot name the same model differently.
+ *
+ * The message carries the same `attribution` metadata a successful reply gets,
+ * even though this block renders the provider and model from its own part
+ * rather than from that metadata. Nothing downstream then has to know that a
+ * failure is a special kind of assistant message to answer "who was this
+ * addressed to"; and `message.tsx` skips the footnote here precisely because
+ * this block already says it, in this same small print.
  *
  * Exported (and pure but for the message id) because everything worth
  * checking about a failure report is here: that the provider's own sentence
@@ -435,16 +441,17 @@ export function failureMessage({
 
   return {
     id: generateUUID(),
-    metadata: { createdAt: new Date().toISOString() },
+    metadata: {
+      attribution: { modelId, providerId },
+      createdAt: new Date().toISOString(),
+    },
     parts: [
       {
         data: {
           detail,
           ...(kind ? { kind } : {}),
           modelId,
-          modelName:
-            modelsFor(providerId).find((model) => model.id === modelId)?.name ??
-            modelId,
+          modelName: modelNameFor(providerId, modelId),
           providerId,
           providerLabel: registry[providerId]?.label ?? providerId,
           ...(lastUserMessage ? { retryOf: lastUserMessage.id } : {}),

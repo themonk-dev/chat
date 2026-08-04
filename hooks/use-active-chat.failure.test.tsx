@@ -208,6 +208,38 @@ describe("a send that fails", () => {
     });
   });
 
+  /**
+   * A failure is attributed like any other assistant message.
+   *
+   * It is rendered from its own part rather than from this metadata — the block
+   * already says which model didn't reply — but the message still carries it, so
+   * every assistant message in a stored thread answers the same question the
+   * same way, and a later reader of the transcript does not have to know that
+   * failures are special.
+   */
+  it("carries the same attribution a successful reply would", async () => {
+    render(tree());
+
+    await waitFor(() => {
+      expect(chat?.currentModelId).toBeTruthy();
+    });
+
+    act(() => {
+      chat?.setCurrentModelId("anthropic/claude-sonnet-4.5", "openrouter");
+    });
+
+    act(() => {
+      onError?.(quotaFailure());
+    });
+
+    expect(messages.at(-1)?.metadata).toMatchObject({
+      attribution: {
+        modelId: "anthropic/claude-sonnet-4.5",
+        providerId: "openrouter",
+      },
+    });
+  });
+
   /** Retry has to re-send the reader's message, so it has to know which one. */
   it("points its retry at the user message that failed", async () => {
     render(tree());

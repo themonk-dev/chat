@@ -1,8 +1,18 @@
-import type { ChatTransport, ModelMessage, UIMessageChunk } from "ai";
+import type {
+  ChatTransport,
+  ModelMessage,
+  TextStreamPart,
+  ToolSet,
+  UIMessageChunk,
+} from "ai";
 import { convertToModelMessages, streamText } from "ai";
 import { getWeather } from "@/lib/ai/tools/get-weather";
 import { describeSendFailure, labelledFailureText } from "@/lib/errors";
-import type { ChatMessage } from "@/lib/types";
+import type {
+  ChatMessage,
+  MessageAttribution,
+  MessageMetadata,
+} from "@/lib/types";
 import { CLAUDE_SYSTEM, modelFor } from "./adapters";
 import { registry } from "./registry";
 
@@ -30,6 +40,30 @@ type Resolve = () => {
   modelId: string;
   providerId: string;
 };
+
+/**
+ * Stamps the assistant message with who is producing it.
+ *
+ * This is the one place that already holds the *resolved* answer — the model's
+ * owner, which `resolveRequest` derives and which is deliberately not whichever
+ * provider happens to be active — so a stamp made here cannot describe a
+ * different request than the one being made. Asking again later (at finish
+ * time, or at render time) is how a reply comes to be credited to whoever the
+ * reader has since switched to, which is the bug class this codebase keeps
+ * meeting.
+ *
+ * On `start` rather than `finish`, and only there: `useChat` merges metadata
+ * into the message as soon as the chunk arrives, so a reply that is stopped
+ * halfway, or whose stream dies mid-sentence, is attributed just like one that
+ * finished. Returning `undefined` for every other part keeps it to a single
+ * stamp — `toUIMessageStream` emits a `message-metadata` chunk for any part
+ * this answers.
+ */
+function attributionMetadata(
+  attribution: MessageAttribution
+): (options: { part: TextStreamPart<ToolSet> }) => MessageMetadata | undefined {
+  return ({ part }) => (part.type === "start" ? { attribution } : undefined);
+}
 
 /**
  * Runs the model call in the browser.
@@ -106,7 +140,10 @@ export class OAuthChatTransport implements ChatTransport<ChatMessage> {
       tools: { getWeather },
     });
 
-    return result.toUIMessageStream({ onError: streamErrorText });
+    return result.toUIMessageStream({
+      messageMetadata: attributionMetadata({ modelId, providerId }),
+      onError: streamErrorText,
+    });
   }
 
   reconnectToStream(): Promise<ReadableStream<UIMessageChunk> | null> {
@@ -167,7 +204,13 @@ function streamGemini({
         });
 
         const reader = result
-          .toUIMessageStream({ onError: streamErrorText })
+          .toUIMessageStream({
+            messageMetadata: attributionMetadata({
+              modelId,
+              providerId: "gemini",
+            }),
+            onError: streamErrorText,
+          })
           .getReader();
 
         for (;;) {
