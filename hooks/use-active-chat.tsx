@@ -20,9 +20,9 @@ import { useDataStream } from "@/components/chat/data-stream-provider";
 import { toast } from "@/components/chat/toast";
 import { useProviderAuth } from "@/hooks/use-provider-auth";
 import { deleteChat, readChat, writeChat } from "@/lib/chats/store";
-import { ChatbotError } from "@/lib/errors";
-import { defaultModelFor } from "@/lib/oauth/models";
-import { PROVIDER_ORDER } from "@/lib/oauth/registry";
+import { ChatbotError, describeSendFailure } from "@/lib/errors";
+import { defaultModelFor, modelsFor } from "@/lib/oauth/models";
+import { PROVIDER_ORDER, registry } from "@/lib/oauth/registry";
 import { clientFor } from "@/lib/oauth/storage";
 import { OAuthChatTransport } from "@/lib/oauth/transport";
 import type { ChatMessage } from "@/lib/types";
@@ -398,6 +398,64 @@ export function resolveRequest({
   };
 }
 
+/**
+ * Turns a failed send into the assistant message that reports it, appended to
+ * the transcript it failed in.
+ *
+ * A separate message rather than a part bolted onto whatever came last:
+ * a stream that died halfway leaves a genuine partial reply behind, and that
+ * partial is not the error — the reader needs to see both, in the order they
+ * happened.
+ *
+ * The model name comes from the static catalogue and falls back to the raw
+ * slug, which is the honest answer for a model that was picked from a live
+ * listing this build has never heard of: a slug names the model, and inventing
+ * a prettier one would not.
+ *
+ * Exported (and pure but for the message id) because everything worth
+ * checking about a failure report is here: that the provider's own sentence
+ * survives, that the right provider and model are named, and that the retry
+ * points at the user's message rather than at the failure.
+ */
+export function failureMessage({
+  error,
+  messages,
+  modelId,
+  providerId,
+}: {
+  error: unknown;
+  messages: readonly ChatMessage[];
+  modelId: string;
+  providerId: string;
+}): ChatMessage {
+  const { detail, kind } = describeSendFailure(error);
+  const lastUserMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "user");
+
+  return {
+    id: generateUUID(),
+    metadata: { createdAt: new Date().toISOString() },
+    parts: [
+      {
+        data: {
+          detail,
+          ...(kind ? { kind } : {}),
+          modelId,
+          modelName:
+            modelsFor(providerId).find((model) => model.id === modelId)?.name ??
+            modelId,
+          providerId,
+          providerLabel: registry[providerId]?.label ?? providerId,
+          ...(lastUserMessage ? { retryOf: lastUserMessage.id } : {}),
+        },
+        type: "data-error",
+      },
+    ],
+    role: "assistant",
+  };
+}
+
 const ActiveChatContext = createContext<ActiveChatContextValue | null>(null);
 
 function extractChatId(pathname: string): string | null {
@@ -449,6 +507,19 @@ function transcriptSignature(messages: readonly unknown[]): string {
  * every render during streaming, and `messages` is unrelated to the input
  * textbox, so this runs once per settled turn — not per keystroke.
  */
+/**
+ * The two statuses at which the transcript is finished moving.
+ *
+ * `"error"` belongs here as squarely as `"ready"` does, and leaving it out was
+ * why a failed exchange vanished on reload: the reader's question had been
+ * asked, the URL said `/chat/<id>`, and nothing was ever written for that id —
+ * so the thread was not merely unexplained, it was gone. Nothing is streaming
+ * in the `"error"` state either, so persisting there stores a settled
+ * transcript for exactly the same reason `"ready"` does, failure report and
+ * all.
+ */
+const SETTLED_STATUSES = new Set(["ready", "error"]);
+
 export function shouldPersistChat({
   status,
   messages,
@@ -458,7 +529,7 @@ export function shouldPersistChat({
   messages: readonly unknown[];
   storedMessages: readonly unknown[];
 }): boolean {
-  if (status !== "ready" || messages.length === 0) {
+  if (!SETTLED_STATUSES.has(status) || messages.length === 0) {
     return false;
   }
 
@@ -494,7 +565,7 @@ export function usePersistChat({
   status: string;
 }): void {
   useEffect(() => {
-    if (status !== "ready" || messages.length === 0) {
+    if (!SETTLED_STATUSES.has(status) || messages.length === 0) {
       return;
     }
 
@@ -646,6 +717,23 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
 
   const initialMessages: ChatMessage[] = readChat(chatId)?.messages ?? [];
 
+  /**
+   * `useChat`'s own `setMessages`, mirrored so `onError` can reach it.
+   *
+   * `onError` is declared inside the options object below, which is evaluated
+   * before `useChat` has returned anything — so the failure report has nothing
+   * to append to unless the helper is threaded back in. A ref rather than a
+   * `useState` because nothing renders from it, and it is written from an
+   * effect rather than during render so a re-render can never publish a
+   * setter belonging to a torn-down chat.
+   *
+   * There is no ordering hazard: an error can only follow a send, and a send
+   * can only follow the mount that assigns this.
+   */
+  const setMessagesRef = useRef<
+    UseChatHelpers<ChatMessage>["setMessages"] | undefined
+  >(undefined);
+
   const {
     messages,
     setMessages,
@@ -665,15 +753,40 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       }
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));
     },
+    /**
+     * Every failed send arrives here, whichever way it failed.
+     *
+     * A transport that throws before a stream exists (no token, a refused
+     * connection, a model that could not be built) reaches this directly. A
+     * stream that carries an `{type: "error"}` chunk mid-flight reaches it too:
+     * `Chat.makeRequest` hands `processUIMessageStream` an `onError` that
+     * rethrows, so the chunk lands in the same `catch` as a thrown send. One
+     * handler is therefore the whole of both paths, and one rendering
+     * downstream reports them identically — which is right, because to a
+     * reader they are the same event.
+     *
+     * The toast stays, as the thing that draws the eye at the moment it
+     * happens; the message below it is the thing that is still there
+     * afterwards, and after a reload.
+     */
     onError: (error) => {
-      if (error instanceof ChatbotError) {
-        toast({ description: error.message, type: "error" });
-      } else {
-        toast({
-          description: error.message || "Oops, an error occurred!",
-          type: "error",
-        });
-      }
+      toast({
+        description:
+          error instanceof ChatbotError
+            ? error.message
+            : describeSendFailure(error).detail,
+        type: "error",
+      });
+
+      setMessagesRef.current?.((previous) => [
+        ...previous,
+        failureMessage({
+          error,
+          messages: previous,
+          modelId: selectionRef.current.modelId,
+          providerId: selectionRef.current.providerId ?? activeIdRef.current,
+        }),
+      ]);
     },
     sendAutomaticallyWhen: ({ messages: currentMessages }) => {
       const lastMessage = currentMessages.at(-1);
@@ -697,6 +810,10 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       })
     ),
   });
+
+  useEffect(() => {
+    setMessagesRef.current = setMessages;
+  }, [setMessages]);
 
   useEffect(() => {
     if (status === "submitted" || status === "ready" || status === "error") {

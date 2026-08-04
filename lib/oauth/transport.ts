@@ -1,9 +1,29 @@
 import type { ChatTransport, ModelMessage, UIMessageChunk } from "ai";
 import { convertToModelMessages, streamText } from "ai";
 import { getWeather } from "@/lib/ai/tools/get-weather";
+import { describeSendFailure, labelledFailureText } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
 import { CLAUDE_SYSTEM, modelFor } from "./adapters";
 import { registry } from "./registry";
+
+/**
+ * What a mid-stream failure is allowed to say.
+ *
+ * `toUIMessageStream` defaults this to the constant "An error occurred." — the
+ * right default on a server, where the alternative is leaking a stack trace to
+ * a stranger. Here there is no server and no stranger: the model call is made
+ * in the reader's own tab with the reader's own token, so the only person the
+ * provider's message could be withheld from is the one it was written for.
+ * Keeping the default here is how a quota rejection with a perfectly clear
+ * explanation reaches the thread as five useless words.
+ *
+ * The class name is folded into the same string because a string is all the
+ * SDK carries across a stream: the far end rebuilds this as a plain
+ * `new Error(text)`, so anything not written here is lost. `describeSendFailure`
+ * unfolds it again.
+ */
+const streamErrorText = (error: unknown): string =>
+  labelledFailureText(describeSendFailure(error));
 
 type Resolve = () => {
   accessToken: string | undefined;
@@ -86,7 +106,7 @@ export class OAuthChatTransport implements ChatTransport<ChatMessage> {
       tools: { getWeather },
     });
 
-    return result.toUIMessageStream();
+    return result.toUIMessageStream({ onError: streamErrorText });
   }
 
   reconnectToStream(): Promise<ReadableStream<UIMessageChunk> | null> {
@@ -146,7 +166,9 @@ function streamGemini({
           tools: { getWeather },
         });
 
-        const reader = result.toUIMessageStream().getReader();
+        const reader = result
+          .toUIMessageStream({ onError: streamErrorText })
+          .getReader();
 
         for (;;) {
           // biome-ignore lint/performance/noAwaitInLoops: draining a reader is inherently sequential — each read depends on the last one's result

@@ -169,13 +169,45 @@ function PureMultimodalInput({
     ""
   );
 
+  /**
+   * Restores a draft left behind by a previous visit — once, on mount, from
+   * `localStorage` alone.
+   *
+   * The template ran this on every change of the stored value and preferred
+   * `textareaRef.current.value` over both the stored draft and React state:
+   *
+   * ```ts
+   * const finalValue = domValue || localStorageInput || "";
+   * ```
+   *
+   * For a controlled textarea that inverts the direction the value is
+   * supposed to travel. The DOM node is a *copy* of `input`, so consulting it
+   * turns any moment where the two disagree into a decision in the copy's
+   * favour — and the two disagree constantly, because this effect and the one
+   * below form a loop: writing state schedules a `localStorage` write, and a
+   * `localStorage` write re-runs this. Instrumenting the pair in the browser
+   * shows it settling a mount in five passes, one of which writes a stale
+   * empty string over a real stored draft and another of which copies the DOM
+   * back into state to undo it. Anything that lands mid-loop — a send that
+   * empties the composer, another tab writing the key — is liable to be
+   * reverted by whichever copy the next pass happens to read.
+   *
+   * Running once, from storage only, leaves `input` the single writer of both
+   * the textarea and the stored draft. Restoring only into an empty composer
+   * keeps it from overwriting text the shell has already put there (the edit
+   * flow sets `input` before this mounts).
+   */
+  const hasRestoredDraft = useRef(false);
   useEffect(() => {
-    if (textareaRef.current) {
-      const domValue = textareaRef.current.value;
-      const finalValue = domValue || localStorageInput || "";
-      setInput(finalValue);
+    if (hasRestoredDraft.current) {
+      return;
     }
-  }, [localStorageInput, setInput]);
+    hasRestoredDraft.current = true;
+
+    if (localStorageInput && !input) {
+      setInput(localStorageInput);
+    }
+  }, [input, localStorageInput, setInput]);
 
   useEffect(() => {
     setLocalStorageInput(input);
@@ -258,32 +290,45 @@ function PureMultimodalInput({
     [chatId, clearChat, resolvedTheme, router, setInput, setTheme]
   );
 
+  /**
+   * Empties the composer, then sends what it held.
+   *
+   * The order is the fix. These three clears used to sit *after* the
+   * `sendMessage(...)` call, so whether the composer emptied depended on that
+   * call returning normally — and the reader saw their text still in the box,
+   * under a live Send button, precisely when the send had gone wrong. Pressing
+   * Enter again then sent it a second time, which is how a failed message
+   * became two messages.
+   *
+   * Clearing first makes emptying the composer unconditional: nothing
+   * `sendMessage` does, synchronously or later, can skip it. Nothing is lost
+   * by clearing early either — the parts array is built from values captured
+   * above, and a send that fails now reports itself in the thread with a
+   * Retry, so the text the reader typed is still on screen and still
+   * re-sendable. That is what makes this safe rather than merely tidy.
+   */
   const submitForm = useCallback(() => {
+    const parts = [
+      ...attachments.map((attachment) => ({
+        mediaType: attachment.contentType,
+        name: attachment.name,
+        type: "file" as const,
+        url: attachment.url,
+      })),
+      { text: input, type: "text" as const },
+    ];
+
+    setAttachments([]);
+    setLocalStorageInput("");
+    setInput("");
+
     window.history.pushState(
       {},
       "",
       `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/chat/${chatId}`
     );
 
-    sendMessage({
-      parts: [
-        ...attachments.map((attachment) => ({
-          mediaType: attachment.contentType,
-          name: attachment.name,
-          type: "file" as const,
-          url: attachment.url,
-        })),
-        {
-          text: input,
-          type: "text",
-        },
-      ],
-      role: "user",
-    });
-
-    setAttachments([]);
-    setLocalStorageInput("");
-    setInput("");
+    sendMessage({ parts, role: "user" });
 
     if (width && width > 768) {
       textareaRef.current?.focus();
