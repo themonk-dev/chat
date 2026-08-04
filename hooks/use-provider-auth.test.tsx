@@ -1,3 +1,15 @@
+/**
+ * The deployed origin, because the paste cases below are about the origin
+ * where pasting is the only thing that works. On loopback — jsdom's default —
+ * both Claude and Gemini complete in a popup instead (see `flowFor`), so
+ * those cases would be exercising a flow that origin never runs. The popup
+ * and device cases in this file are unaffected: their providers declare
+ * those flows everywhere.
+ *
+ * @vitest-environment jsdom
+ * @vitest-environment-options { "url": "https://chat.themonk.dev/" }
+ */
+
 import type { TokenSet } from "@ai-oauth-sdk/browser";
 import { isOAuthError, OAuthError } from "@ai-oauth-sdk/browser";
 import { act, renderHook } from "@testing-library/react";

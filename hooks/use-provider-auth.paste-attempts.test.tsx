@@ -1,3 +1,13 @@
+/**
+ * The deployed origin: on loopback, Claude no longer has a paste attempt to
+ * have bugs in — it completes in a popup (see `flowFor`). This whole file is
+ * about the lifetime of one paste attempt, so it belongs on the origin where
+ * that attempt exists.
+ *
+ * @vitest-environment jsdom
+ * @vitest-environment-options { "url": "https://chat.themonk.dev/" }
+ */
+
 import type { TokenSet } from "@ai-oauth-sdk/browser";
 import {
   createBrowserAuthClient,

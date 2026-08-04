@@ -38,7 +38,12 @@ export const registry: Record<
  * Deliberately an allow-list of three exact hostnames rather than anything
  * cleverer, because each was probed against Google's real authorization
  * endpoint with the published gemini-cli client id and a `/callback` path,
- * and the answers do not follow the rule you would guess:
+ * and the answers do not follow the rule you would guess. Anthropic's client
+ * is registered for loopback the same way and is held to the same list —
+ * its endpoint sits behind a bot challenge that answers before any OAuth
+ * validation does, so it cannot be probed the way Google's was, and
+ * inheriting a list that is known to be *narrower* than the RFC is the safe
+ * direction to be wrong in:
  *
  * - `localhost`, `127.0.0.1`, `[::1]` — reach the account chooser. Accepted.
  * - `app.localhost` — `invalid_request`, "doesn't comply with Google's OAuth
@@ -81,33 +86,45 @@ export function currentOrigin(): { hostname: string } | undefined {
 }
 
 /**
- * The flow to actually run for a provider here, which is the declared one for
- * everybody except Gemini.
+ * The two providers whose registered client accepts a loopback redirect, and
+ * which therefore need nothing pasted when this app is itself served from
+ * one.
  *
- * Gemini's descriptor declares `redirect: { mode: 'loopback', loopbackPort: 0
- * }` — a loopback redirect on any free port, which a CLI serves by binding
- * one. A browser cannot bind anything, which is why Gemini falls back to
- * pasting the address bar out of a `localhost` URL that failed to load.
+ * Both declare `redirect: { mode: 'loopback', loopbackPort: 0 }` in their SDK
+ * descriptors — a loopback redirect on any free port, which a CLI serves by
+ * binding one. A browser cannot bind anything, which is why each falls back
+ * to a paste: Gemini to copying the address bar out of a `localhost` URL that
+ * failed to load, Claude to copying the `CODE#STATE` string Anthropic prints
+ * on its hosted callback page.
  *
- * But in development this app *is* served from a loopback address, and that
- * changes what it can offer Google: a loopback redirect on an arbitrary port
- * (RFC 8252) pointed at our own `/callback`, which is same-origin with the
- * opener, runs `postCallbackToOpener()` and closes itself. That is the
- * OpenRouter path exactly, and it is a far better experience than copying a
- * URL out of a broken tab.
+ * On loopback there is a third option, and it is the one both descriptors
+ * were written for. RFC 8252 has the port component of a loopback redirect
+ * ignored at registration, so `http://localhost:<whatever>/callback` is a
+ * registered URI for both — and here that address is *our own* `/callback`
+ * page, same-origin with the opener, which runs `postCallbackToOpener()` and
+ * closes itself. That is the OpenRouter path exactly.
  *
- * It cannot follow the app to production, and that is not a detail to fix
- * later — it is why this is a branch and not a change to the registry.
- * `https://chat.themonk.dev/callback` is answered `redirect_uri_mismatch` by
- * Google (probed live) because a Desktop-app client is not permitted an HTTPS
- * redirect, and a loopback redirect cannot reach a remote origin either. So
- * anywhere but loopback, the paste flow the site ships today is the only one
- * that works, and it stays.
+ * Neither can follow the app to production, and that is not a detail to fix
+ * later. `https://chat.themonk.dev/callback` is answered
+ * `redirect_uri_mismatch` by Google (probed live) because a Desktop-app
+ * client is not permitted an HTTPS redirect, and Anthropic's client is
+ * registered the same way — a loopback redirect cannot reach a remote origin
+ * under either. So anywhere but loopback the paste flow stays, and it stays
+ * for a reason, not as a leftover.
  *
  * Registering a Google "Web application" client with an HTTPS redirect URI
- * would remove the limitation and make this branch unnecessary — that is the
- * owner's call to make, since it means publishing a second client id, not
- * something to take on their behalf here.
+ * would remove half the limitation — that is the owner's call to make, since
+ * it means publishing a second client id. Anthropic offers no such option:
+ * its hosted callback page is the only non-loopback redirect it accepts, and
+ * that page is cross-origin, so a popup opened onto it can be closed by us
+ * but never read. There is no version of this that works on the deployed
+ * site.
+ */
+const LOOPBACK_POPUP_PROVIDERS = new Set(["claude", "gemini"]);
+
+/**
+ * The flow to actually run for a provider here, which is the declared one for
+ * everybody but the two above.
  */
 export function flowFor(
   providerId: string,
@@ -115,7 +132,7 @@ export function flowFor(
 ): Flow {
   const declared = registry[providerId].flow;
 
-  if (providerId === "gemini" && isLoopbackOrigin(origin)) {
+  if (LOOPBACK_POPUP_PROVIDERS.has(providerId) && isLoopbackOrigin(origin)) {
     return "popup";
   }
 

@@ -1,3 +1,16 @@
+/**
+ * Run at the deployed origin, not jsdom's default `localhost`.
+ *
+ * Claude signs in by pasting only where a loopback redirect is unavailable —
+ * on loopback it now completes in a popup (see `flowFor`). jsdom serves every
+ * test from `localhost` unless told otherwise, so a paste-flow test left on
+ * the default origin is testing a flow that origin never runs. This is the
+ * one docblock that puts the test on the origin its subject belongs to.
+ *
+ * @vitest-environment jsdom
+ * @vitest-environment-options { "url": "https://chat.themonk.dev/" }
+ */
+
 import type { TokenSet } from "@ai-oauth-sdk/browser";
 import { OAuthError } from "@ai-oauth-sdk/browser";
 import {
