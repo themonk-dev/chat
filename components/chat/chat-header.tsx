@@ -1,6 +1,6 @@
 "use client";
 
-import { GithubIcon, PanelLeftIcon } from "lucide-react";
+import { ExternalLinkIcon, GithubIcon, PanelLeftIcon } from "lucide-react";
 import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
@@ -31,6 +31,19 @@ function PureChatHeader() {
       <ManageProviders />
 
       <div className="ml-auto flex items-center gap-1.5">
+        <a
+          className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+          href="https://themonk.dev"
+          rel="noopener noreferrer"
+          target="_blank"
+        >
+          built by{" "}
+          <span className="inline-flex items-center gap-0.5 underline underline-offset-2">
+            themonk.dev
+            <ExternalLinkIcon className="size-3" />
+          </span>
+        </a>
+
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
