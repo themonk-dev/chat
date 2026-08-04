@@ -1,5 +1,5 @@
-import { isBotRequest } from "@/lib/oauth/bot-gate";
 import { forward, uncacheable } from "@/lib/oauth/proxy";
+import { isForeignOrigin } from "@/lib/oauth/same-origin";
 import { resolveTarget, withQuery } from "@/lib/oauth/targets";
 
 /**
@@ -15,8 +15,7 @@ async function handler(
   request: Request,
   { params }: { params: Promise<RouteParams> }
 ) {
-  // Bounded and fail-open; see `isBotRequest`.
-  if (await isBotRequest()) {
+  if (isForeignOrigin(request)) {
     return uncacheable(Response.json({ error: "blocked" }, { status: 403 }));
   }
 
