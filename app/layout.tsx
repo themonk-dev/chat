@@ -14,15 +14,13 @@ const TWITTER_DESCRIPTION =
   "Use the AI plans you already pay for. Switch provider mid-conversation. No API keys.";
 const OG_IMAGE_ALT = "Every AI subscription you pay for. One chat window.";
 
-/**
- * `/og.png` is a rewrite onto `app/og/route.tsx` (see next.config.ts), so a
- * static `public/og.png` can take over later without touching these tags.
- */
+// Declared at the file's real 2x size, not the 1200x630 it is laid out for:
+// scrapers reserve the box from these before the image arrives.
 const OG_IMAGE = {
   alt: OG_IMAGE_ALT,
-  height: 630,
+  height: 1260,
   url: "/og.png",
-  width: 1200,
+  width: 2400,
 };
 
 export const metadata: Metadata = {
