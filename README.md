@@ -29,9 +29,14 @@ a token endpoint that wants a published client secret). It forwards the
 ## Providers
 
 OpenRouter, ChatGPT (Codex), Claude, Gemini (Code Assist), Grok, GitHub Copilot
-and Qwen. Which sign-in flow each one uses — popup, device code, or paste — is
-dictated by the client each vendor published, not by a setting; see
-`lib/oauth/registry.ts`.
+and Qwen. Which sign-in flow each uses is dictated by the client that vendor
+published, not by a setting (`lib/oauth/registry.ts`):
+
+| Flow | Providers | Why |
+| --- | --- | --- |
+| Device code | ChatGPT, Grok, GitHub Copilot, Qwen | No redirect URI is involved, so it works on any origin. |
+| Popup | OpenRouter | Its key endpoint accepts any callback URL. |
+| Paste | Claude, Gemini | Their clients register only a loopback redirect (and, for Claude, Anthropic's own hosted code page). A deployed origin is not a registered redirect URI, so the code is copied by hand. On `localhost` both get the popup instead. |
 
 ## Running locally
 

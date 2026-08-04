@@ -3,6 +3,7 @@ import {
   OAuthError,
   parseStandardCallback,
 } from "@ai-oauth-sdk/browser";
+import { openPopup } from "./popup-window";
 import { proxiedProviders } from "./providers";
 
 /**
@@ -28,19 +29,18 @@ export function tabNameFor(providerId: string): string {
 }
 
 /**
+ * A popup rather than a tab, so the reader can see the code and the dialog they
+ * are pasting it into at once — the same window the device flows open.
+ *
  * `noopener` is deliberately not passed: it is what makes `window.open` return
  * `null` and the browser ignore the window name, so there is no version of this
- * that severs the opener and can still focus or close its own tab.
+ * that severs the opener and can still focus or close its own window.
  */
 export function openAuthorizationTab(
   url: string,
   providerId: string
 ): Window | null {
-  try {
-    return window.open(url, tabNameFor(providerId));
-  } catch {
-    return null;
-  }
+  return openPopup(url, tabNameFor(providerId));
 }
 
 export function stateOfAuthorizationUrl(url: string): string | undefined {

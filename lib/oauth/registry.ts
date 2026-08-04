@@ -1,6 +1,11 @@
 /**
  * How each provider signs in, and what to call it on screen. The flow is what
  * the provider's registered client permits, not a preference.
+ *
+ * `device` needs no redirect URI, so it works on any origin — but only four of
+ * the seven declare one. `popup` needs the provider to redirect back to *our*
+ * origin, which only OpenRouter accepts unconditionally. `paste` is the
+ * fallback for a client registered solely for loopback or its own hosted page.
  */
 export type Flow = "device" | "paste" | "popup";
 
@@ -8,9 +13,12 @@ export const registry: Record<
   string,
   { flow: Flow; label: string; pasteHint?: string }
 > = {
-  // Anthropic accepts an HTTPS `/callback` for the published Claude Code
-  // client (probed live), unlike Google's Desktop-app client.
-  claude: { flow: "popup", label: "Claude" },
+  claude: {
+    flow: "paste",
+    label: "Claude",
+    pasteHint:
+      "Claude shows you a code once you approve. Copy it and paste it here.",
+  },
   gemini: {
     flow: "paste",
     label: "Gemini",
@@ -57,13 +65,19 @@ export function currentOrigin(): { hostname: string } | undefined {
 export const SEVERING_AUTH_PAGES = new Set(["claude"]);
 
 /**
- * Gemini's Desktop-app client only accepts a loopback redirect, so on loopback
- * our own `/callback` page qualifies (RFC 8252 ignores the port) and the popup
- * works. In production Google answers `redirect_uri_mismatch`, hence paste.
+ * The two whose published clients register a loopback redirect and nothing a
+ * deployed origin can use. On loopback our own `/callback` qualifies (RFC 8252
+ * ignores the port) so the popup completes by itself; anywhere else the
+ * provider answers `redirect_uri_mismatch` — or, for Anthropic, "Redirect URI
+ * … is not supported by client" — so the flow falls back to paste.
+ *
+ * Neither declares a device endpoint, which is the only grant that needs no
+ * redirect URI at all and the reason ChatGPT, Copilot, Grok and Qwen work on
+ * every origin. See the note on `Flow`.
  */
-const LOOPBACK_POPUP_PROVIDERS = new Set(["gemini"]);
+const LOOPBACK_POPUP_PROVIDERS = new Set(["claude", "gemini"]);
 
-/** The declared flow for everybody but Gemini. */
+/** The declared flow, except on loopback for the two providers above. */
 export function flowFor(
   providerId: string,
   origin: { hostname: string } | undefined

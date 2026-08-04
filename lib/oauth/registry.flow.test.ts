@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { flowFor, isLoopbackOrigin, registry } from "./registry";
 
 /**
- * Gemini's flow is the one entry in the registry that is not a constant, and
- * these are the cases that decide it. They are written against
+ * Claude and Gemini are the two entries in the registry that are not
+ * constants, and these are the cases that decide them. They are written against
  * `flowFor`/`isLoopbackOrigin` directly, with the origin passed in, because
  * jsdom's `window.location` is unforgeable — a test that wanted to move the
  * origin could not — and because the branch is a fact about an origin, not
@@ -21,20 +21,30 @@ describe("flowFor", () => {
   });
 
   /**
-   * Claude is not origin-dependent, and this is the case that says so.
+   * Claude is origin-dependent for the same reason Gemini is, and this is the
+   * regression that says so. It shipped as popup-on-every-origin, which a
+   * deployed origin answers with
    *
-   * Anthropic accepts `https://<our origin>/callback` for the published
-   * Claude Code client — probed live, signed in, where
-   * `https://chat.themonk.dev/callback` reached the consent screen rather
-   * than a `redirect_uri_mismatch`. So there is no loopback exception to
-   * make and no paste to fall back to: the same popup runs everywhere,
-   * including the deployed site.
+   *   Redirect URI https://<host>/callback is not supported by client
+   *
+   * because Anthropic's published client registers only loopback and its own
+   * hosted page (`redirect.hostedUri` on the SDK descriptor). The paste flow
+   * sends that hosted page as the redirect URI, so it is the one that works
+   * off loopback.
    */
-  it("gives Claude the popup flow on every origin", () => {
+  it("gives Claude the popup flow only on loopback", () => {
     expect(flowFor("claude", { hostname: "localhost" })).toBe("popup");
-    expect(flowFor("claude", { hostname: "chat.themonk.dev" })).toBe("popup");
-    expect(flowFor("claude", { hostname: "app.localhost" })).toBe("popup");
-    expect(flowFor("claude", undefined)).toBe("popup");
+    expect(flowFor("claude", { hostname: "127.0.0.1" })).toBe("popup");
+    expect(flowFor("claude", { hostname: "[::1]" })).toBe("popup");
+  });
+
+  it("falls Claude back to paste anywhere a redirect URI is not registered", () => {
+    expect(flowFor("claude", { hostname: "chat.themonk.dev" })).toBe("paste");
+    expect(
+      flowFor("claude", { hostname: "chat-git-branch-themonkdev.vercel.app" })
+    ).toBe("paste");
+    expect(flowFor("claude", { hostname: "app.localhost" })).toBe("paste");
+    expect(flowFor("claude", undefined)).toBe("paste");
   });
 
   it("leaves Gemini on the paste flow anywhere else", () => {
@@ -69,7 +79,7 @@ describe("flowFor", () => {
 
   it("leaves every other provider's declared flow alone", () => {
     for (const [id, entry] of Object.entries(registry)) {
-      if (id === "gemini") {
+      if (id === "claude" || id === "gemini") {
         continue;
       }
 
