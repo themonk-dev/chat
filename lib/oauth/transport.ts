@@ -125,10 +125,17 @@ export class OAuthChatTransport implements ChatTransport<ChatMessage> {
     // UI ignores the rest of the stream.
     const result = streamText({
       abortSignal,
-      messages:
-        providerId === "claude"
-          ? [{ content: CLAUDE_SYSTEM, role: "system" }, ...modelMessages]
-          : modelMessages,
+      /*
+       * Claude's OAuth tokens only answer for Claude Code, so the request has
+       * to carry its system prompt — but as `instructions`, not as a `system`
+       * entry in `messages`. The SDK rejects the latter outright with
+       * `AI_InvalidPromptError: System messages are not allowed in the prompt
+       * or messages fields. Use the instructions option instead.` That is
+       * exactly how this shipped, so Claude could sign in and then failed on
+       * every single message.
+       */
+      ...(providerId === "claude" ? { instructions: CLAUDE_SYSTEM } : {}),
+      messages: modelMessages,
       model,
       // Codex runs stateless and answers a request that does not say so with
       // a silent empty stream. `adapters.ts` enforces this at the wire level

@@ -14,7 +14,14 @@ vi.mock("ai", async (importOriginal) => {
   };
 });
 
+/*
+ * `CLAUDE_SYSTEM` was absent from this mock until the Claude branch was finally
+ * tested — which is precisely why that branch shipped broken. No test could
+ * build a Claude request without first tripping over the missing export, so
+ * nothing ever did.
+ */
 vi.mock("./adapters", () => ({
+  CLAUDE_SYSTEM: "You are Claude Code, Anthropic's official CLI for Claude.",
   modelFor: vi.fn(() => "fake-model"),
 }));
 
@@ -213,5 +220,67 @@ describe("attribution on the reply", () => {
     expect(
       options?.messageMetadata?.({ part: { type: "text-delta" } })
     ).toBeUndefined();
+  });
+});
+
+/**
+ * Claude's OAuth tokens only answer for Claude Code, so its system prompt has
+ * to travel with every request — and the SDK refuses to take it as a `system`
+ * entry in `messages`, answering `AI_InvalidPromptError: System messages are
+ * not allowed in the prompt or messages fields. Use the instructions option
+ * instead.` That is how it shipped: Claude signed in, then failed on every
+ * message with a wall of red. Pinned so it cannot come back.
+ */
+describe("Claude's system prompt", () => {
+  it("travels as instructions, never as a message", async () => {
+    const toUIMessageStream = vi.fn(() => new ReadableStream<UIMessageChunk>());
+    streamTextMock.mockReturnValue({ toUIMessageStream });
+
+    const transport = new OAuthChatTransport(() => ({
+      accessToken: "test-token",
+      modelId: "claude-sonnet-4-5",
+      providerId: "claude",
+    }));
+
+    await transport.sendMessages({
+      abortSignal: new AbortController().signal,
+      chatId: "chat-claude",
+      messageId: undefined,
+      messages: [],
+      trigger: "submit-message",
+    });
+
+    const options = streamTextMock.mock.calls.at(-1)?.[0] as {
+      instructions?: string;
+      messages: { role: string }[];
+    };
+
+    expect(options.instructions).toBeTruthy();
+    expect(options.messages.some((m) => m.role === "system")).toBe(false);
+  });
+
+  it("leaves other providers without instructions", async () => {
+    const toUIMessageStream = vi.fn(() => new ReadableStream<UIMessageChunk>());
+    streamTextMock.mockReturnValue({ toUIMessageStream });
+
+    const transport = new OAuthChatTransport(() => ({
+      accessToken: "test-token",
+      modelId: "grok-4",
+      providerId: "xai",
+    }));
+
+    await transport.sendMessages({
+      abortSignal: new AbortController().signal,
+      chatId: "chat-xai",
+      messageId: undefined,
+      messages: [],
+      trigger: "submit-message",
+    });
+
+    const options = streamTextMock.mock.calls.at(-1)?.[0] as {
+      instructions?: string;
+    };
+
+    expect(options.instructions).toBeUndefined();
   });
 });

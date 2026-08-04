@@ -5,6 +5,7 @@ import type { ChatMessage } from "@/lib/types";
 import {
   ActiveChatProvider,
   failureMessage,
+  isBlankReply,
   shouldPersistChat,
   useActiveChat,
 } from "./use-active-chat";
@@ -322,5 +323,57 @@ describe("a send that fails", () => {
         storedMessages: [],
       })
     ).toBe(false);
+  });
+});
+
+/**
+ * One question, one reply — even when the reply is a failure.
+ *
+ * The live report: every error produced *two* assistant bubbles, an empty one
+ * above the report. The SDK opens an assistant message the moment a send
+ * starts, so by the time the failure arrives there is already a bubble on
+ * screen holding nothing; appending the report left the carcass sitting above
+ * it. `isBlankReply` is what decides whether that carcass is replaced or a
+ * partial answer is kept.
+ */
+describe("isBlankReply", () => {
+  const assistant = (parts: ChatMessage["parts"]): ChatMessage => ({
+    id: "a1",
+    parts,
+    role: "assistant",
+  });
+
+  it("calls a freshly opened reply blank", () => {
+    expect(isBlankReply(assistant([]))).toBe(true);
+    expect(isBlankReply(assistant([{ type: "step-start" }]))).toBe(true);
+  });
+
+  it("calls an empty text part blank, whitespace included", () => {
+    expect(isBlankReply(assistant([{ text: "", type: "text" }]))).toBe(true);
+    expect(isBlankReply(assistant([{ text: "   \n", type: "text" }]))).toBe(
+      true
+    );
+  });
+
+  it("never discards a reply that said something", () => {
+    expect(
+      isBlankReply(assistant([{ text: "Half an ans", type: "text" }]))
+    ).toBe(false);
+  });
+
+  it("never discards a reply that reasoned or called a tool", () => {
+    expect(
+      isBlankReply(assistant([{ text: "thinking", type: "reasoning" }]))
+    ).toBe(false);
+  });
+
+  it("leaves the user's own message alone", () => {
+    expect(
+      isBlankReply({ id: "u1", parts: [], role: "user" } as ChatMessage)
+    ).toBe(false);
+  });
+
+  it("has nothing to replace when the thread is empty", () => {
+    expect(isBlankReply(undefined)).toBe(false);
   });
 });

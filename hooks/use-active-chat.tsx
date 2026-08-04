@@ -423,6 +423,29 @@ export function resolveRequest({
  * survives, that the right provider and model are named, and that the retry
  * points at the user's message rather than at the failure.
  */
+/**
+ * Whether an assistant message would draw nothing on screen.
+ *
+ * A send opens its assistant message before a single token arrives, so a
+ * failure finds one already there with only bookkeeping parts in it —
+ * `step-start`, or a text part still empty. Judged by what renders rather than
+ * by part count, so a reply that produced real text before dying is never
+ * mistaken for an empty one and thrown away.
+ */
+export function isBlankReply(message: ChatMessage | undefined): boolean {
+  if (message?.role !== "assistant") {
+    return false;
+  }
+
+  return !message.parts.some((part) => {
+    if (part.type === "text") {
+      return part.text.trim().length > 0;
+    }
+
+    return part.type !== "step-start";
+  });
+}
+
 export function failureMessage({
   error,
   messages,
@@ -785,15 +808,27 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
         type: "error",
       });
 
-      setMessagesRef.current?.((previous) => [
-        ...previous,
-        failureMessage({
+      setMessagesRef.current?.((previous) => {
+        const report = failureMessage({
           error,
           messages: previous,
           modelId: selectionRef.current.modelId,
           providerId: selectionRef.current.providerId ?? activeIdRef.current,
-        }),
-      ]);
+        });
+
+        /*
+         * The SDK opens an assistant message as soon as a send starts, so by
+         * the time a failure arrives there is usually a bubble on screen
+         * already holding nothing. Appending produced two replies to one
+         * question — an empty one and the report. That empty bubble is the
+         * carcass of the answer that never came, so the report takes its
+         * place. Anything the model did manage to say before failing is left
+         * alone, and the report follows it.
+         */
+        return isBlankReply(previous.at(-1))
+          ? [...previous.slice(0, -1), report]
+          : [...previous, report];
+      });
     },
     sendAutomaticallyWhen: ({ messages: currentMessages }) => {
       const lastMessage = currentMessages.at(-1);
