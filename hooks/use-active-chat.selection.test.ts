@@ -1,7 +1,11 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultModelFor } from "@/lib/oauth/models";
-import { nextSelection, useConnectedProviders } from "./use-active-chat";
+import {
+  nextSelection,
+  resolveRequest,
+  useConnectedProviders,
+} from "./use-active-chat";
 
 /**
  * `useConnectedProviders` depends on `useProviderAuth` (owned by another
@@ -188,5 +192,63 @@ describe("nextSelection", () => {
         owner: "claude",
       })
     ).toEqual({ kind: "clear" });
+  });
+});
+
+describe("resolveRequest", () => {
+  it("addresses the send to the model's owner and pays for it with that owner's token", () => {
+    // The `"keep"` outcome above is exactly the state this arrives in: the
+    // selection still belongs to openrouter while activeId has moved to xai.
+    expect(
+      resolveRequest({
+        activeAccessToken: "xai-secret",
+        activeId: "xai",
+        connected: new Map([
+          ["openrouter", "openrouter-secret"],
+          ["xai", "xai-secret"],
+        ]),
+        modelId: "anthropic/claude-sonnet-4.5",
+        owner: "openrouter",
+      })
+    ).toEqual({
+      accessToken: "openrouter-secret",
+      modelId: "anthropic/claude-sonnet-4.5",
+      providerId: "openrouter",
+    });
+  });
+
+  it("falls back to the active provider when nothing has been selected yet", () => {
+    expect(
+      resolveRequest({
+        activeAccessToken: "claude-secret",
+        activeId: "claude",
+        connected: new Map<string, string>(),
+        modelId: "",
+        owner: undefined,
+      })
+    ).toEqual({
+      accessToken: "claude-secret",
+      modelId: "",
+      providerId: "claude",
+    });
+  });
+
+  it("never borrows the active provider's token for somebody else's model", () => {
+    // The map has not caught up with a fresh connect for claude, so the only
+    // token on hand belongs to openrouter. Fail closed rather than send
+    // claude's model id with openrouter's bearer.
+    expect(
+      resolveRequest({
+        activeAccessToken: "openrouter-secret",
+        activeId: "openrouter",
+        connected: new Map([["openrouter", "openrouter-secret"]]),
+        modelId: "claude-sonnet-4-5",
+        owner: "claude",
+      })
+    ).toEqual({
+      accessToken: undefined,
+      modelId: "claude-sonnet-4-5",
+      providerId: "claude",
+    });
   });
 });

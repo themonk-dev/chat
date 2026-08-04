@@ -14,6 +14,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { useDataStream } from "@/components/chat/data-stream-provider";
 import { toast } from "@/components/chat/toast";
@@ -56,6 +57,107 @@ type ActiveChatContextValue = {
 export type ConnectedProviders = Map<string, string>;
 
 /**
+ * Bumped whenever a provider's stored tokens are revoked outside the
+ * `activeId`/`tokens` pair that `useConnectedProviders` otherwise watches.
+ *
+ * Disconnecting a provider that is *not* the active one changes neither of
+ * those, so without this every connection map in the tree keeps offering a
+ * revoked provider's models — and, worse, keeps `nextSelection` answering
+ * `"keep"` for a selection whose owner no longer holds a token, which is the
+ * second route into the model/provider mismatch below. Rather than have each
+ * map maintain its own private idea of who is connected and hope every
+ * revoker remembers to tell all of them, revocation goes through
+ * `disconnectProvider` and every map re-reads storage.
+ */
+let connectionsRevision = 0;
+const connectionsListeners = new Set<() => void>();
+
+function subscribeConnections(listener: () => void): () => void {
+  connectionsListeners.add(listener);
+
+  return () => {
+    connectionsListeners.delete(listener);
+  };
+}
+
+function readConnectionsRevision(): number {
+  return connectionsRevision;
+}
+
+/**
+ * Tells every `useConnectedProviders` in the tree to re-read storage.
+ *
+ * Nothing is passed along with it deliberately: the notification says only
+ * "storage moved", and each map answers by asking storage itself, so a
+ * notification can never be the thing that files one provider's token under
+ * another provider's id.
+ */
+export function notifyConnectionsChanged(): void {
+  connectionsRevision += 1;
+
+  for (const listener of connectionsListeners) {
+    listener();
+  }
+}
+
+/**
+ * Revokes one provider's tokens, wherever that provider sits relative to the
+ * active one, and makes sure every connection map hears about it.
+ *
+ * The refresh happens after `logout()` settles rather than optimistically,
+ * and it re-reads storage rather than assuming the logout worked — a logout
+ * that failed leaves the token in place, and a map that had already deleted
+ * the entry would then be lying in the other direction.
+ */
+export function disconnectProvider(id: string): Promise<void> {
+  return clientFor(id)
+    .logout()
+    .catch(() => {
+      // Storage is re-read below either way; nothing to decide here.
+    })
+    .then(() => {
+      notifyConnectionsChanged();
+    });
+}
+
+/**
+ * Folds a batch of storage answers into the map, returning `previous`
+ * untouched when nothing actually changed.
+ *
+ * Identity matters here: `useModelGroups` re-fetches every connected
+ * provider's model list whenever this map's identity changes, and the
+ * connection popover now asks for a refresh every time it opens. A refresh
+ * that merely confirms what was already known must therefore be invisible
+ * downstream, not a new `Map` that looks like news.
+ */
+function withConnections(
+  previous: ConnectedProviders,
+  entries: readonly (readonly [string, string | undefined])[]
+): ConnectedProviders {
+  const next = new Map(previous);
+
+  for (const [id, token] of entries) {
+    if (token) {
+      next.set(id, token);
+    } else {
+      next.delete(id);
+    }
+  }
+
+  if (next.size !== previous.size) {
+    return next;
+  }
+
+  for (const [id, token] of next) {
+    if (previous.get(id) !== token) {
+      return next;
+    }
+  }
+
+  return previous;
+}
+
+/**
  * Which providers currently hold a token, independent of which one is
  * active — the same problem `components/chat/provider-selector.tsx` solves
  * for its connection dots, via a similar two-part answer: the *active*
@@ -73,6 +175,11 @@ export type ConnectedProviders = Map<string, string>;
 export function useConnectedProviders(): ConnectedProviders {
   const { activeId, tokens } = useProviderAuth();
   const [connected, setConnected] = useState<ConnectedProviders>(new Map());
+  const revision = useSyncExternalStore(
+    subscribeConnections,
+    readConnectionsRevision,
+    readConnectionsRevision
+  );
 
   /**
    * Re-reads storage for `activeId` directly rather than trusting `tokens`
@@ -113,15 +220,9 @@ export function useConnectedProviders(): ConnectedProviders {
         if (cancelled) {
           return;
         }
-        setConnected((previous) => {
-          const next = new Map(previous);
-          if (found?.accessToken) {
-            next.set(id, found.accessToken);
-          } else {
-            next.delete(id);
-          }
-          return next;
-        });
+        setConnected((previous) =>
+          withConnections(previous, [[id, found?.accessToken]])
+        );
       });
 
     return () => {
@@ -129,6 +230,12 @@ export function useConnectedProviders(): ConnectedProviders {
     };
   }, [activeId, tokens]);
 
+  /**
+   * The full sweep: on mount, and again on every `connectionsRevision` bump,
+   * since a revocation elsewhere in the tree can concern any provider — not
+   * just the active one the effect above watches.
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revision is a deliberate trigger-only dependency, not read in the body — the answer always comes from storage.
   useEffect(() => {
     let cancelled = false;
 
@@ -143,23 +250,13 @@ export function useConnectedProviders(): ConnectedProviders {
       if (cancelled) {
         return;
       }
-      setConnected((previous) => {
-        const next = new Map(previous);
-        for (const [id, token] of results) {
-          if (token) {
-            next.set(id, token);
-          } else {
-            next.delete(id);
-          }
-        }
-        return next;
-      });
+      setConnected((previous) => withConnections(previous, results));
     });
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [revision]);
 
   return connected;
 }
@@ -231,6 +328,66 @@ export function nextSelection({
   }
 
   return currentModelId ? { kind: "clear" } : { kind: "keep" };
+}
+
+/** The three things one send is made of, and who they belong to. */
+export type ResolvedRequest = {
+  accessToken: string | undefined;
+  modelId: string;
+  providerId: string;
+};
+
+/**
+ * Decides which provider a send is addressed to, and picks the token to
+ * address it with from that same answer.
+ *
+ * The provider is the model's *owner* — whoever the selection was made from
+ * — not whichever provider happens to be active. Those two are not the same
+ * thing and are not kept in step on purpose: `nextSelection` returns
+ * `"keep"` whenever the owner is still connected, precisely so that merely
+ * looking at another provider (or connecting one, which leaves it active)
+ * does not disturb a live selection. Pairing `modelId` with `activeId`
+ * therefore sends one provider's model slug to another provider's API — a
+ * 404 if the slug is unknown there, and silently answered and billed to the
+ * wrong account if it is not.
+ *
+ * The token then comes from `connected`, keyed by that same id, so all three
+ * fields are derived from one tag rather than correlated after the fact.
+ * `connected` is built by asking storage about each provider *by id*, so its
+ * entries cannot be mis-attributed. The `activeAccessToken` fallback covers
+ * only the gap right after a fresh connect, where `useProviderAuth` already
+ * holds the token but the map's own storage read has not resolved yet; it is
+ * safe because it is used only when the owner *is* the active provider, and
+ * `useProviderAuth` derives `tokens` from its own provider tag, so an active
+ * token that does not belong to `activeId` is never exposed in the first
+ * place.
+ *
+ * An owner with no token yields `undefined`, which the transport turns into
+ * "Connect a provider before sending a message." — the send fails closed
+ * rather than being re-pointed at somebody else.
+ */
+export function resolveRequest({
+  activeAccessToken,
+  activeId,
+  connected,
+  modelId,
+  owner,
+}: {
+  activeAccessToken: string | undefined;
+  activeId: string;
+  connected: ConnectedProviders;
+  modelId: string;
+  owner: string | undefined;
+}): ResolvedRequest {
+  const providerId = owner ?? activeId;
+
+  return {
+    accessToken:
+      connected.get(providerId) ??
+      (providerId === activeId ? activeAccessToken : undefined),
+    modelId,
+    providerId,
+  };
 }
 
 const ActiveChatContext = createContext<ActiveChatContextValue | null>(null);
@@ -420,6 +577,10 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
   );
 
   const connected = useConnectedProviders();
+  const connectedRef = useRef(connected);
+  useEffect(() => {
+    connectedRef.current = connected;
+  }, [connected]);
 
   /**
    * Applies `nextSelection`'s decision. A no-op (`"keep"`) is the common
@@ -499,11 +660,15 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
         ) ?? false
       );
     },
-    transport: new OAuthChatTransport(() => ({
-      accessToken: tokensRef.current?.accessToken,
-      modelId: currentModelIdRef.current,
-      providerId: activeIdRef.current,
-    })),
+    transport: new OAuthChatTransport(() =>
+      resolveRequest({
+        activeAccessToken: tokensRef.current?.accessToken,
+        activeId: activeIdRef.current,
+        connected: connectedRef.current,
+        modelId: currentModelIdRef.current,
+        owner: currentModelProviderRef.current,
+      })
+    ),
   });
 
   useEffect(() => {

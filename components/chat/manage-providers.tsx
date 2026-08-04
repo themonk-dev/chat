@@ -8,79 +8,17 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  disconnectProvider,
+  notifyConnectionsChanged,
+  useConnectedProviders,
+} from "@/hooks/use-active-chat";
 import { useProviderAuth } from "@/hooks/use-provider-auth";
 import { PROVIDER_ORDER, registry } from "@/lib/oauth/registry";
-import { clientFor } from "@/lib/oauth/storage";
 import { cn } from "@/lib/utils";
 import { AuthDialog } from "./auth-dialog";
 import { ChevronDownIcon } from "./icons";
 import { providerLogos } from "./provider-logos";
-
-/** Snapshots which providers hold a token right now, straight from storage. */
-async function fetchConnectedIds(): Promise<Set<string>> {
-  const results = await Promise.all(
-    PROVIDER_ORDER.map(async (id) => {
-      const tokens = await clientFor(id)
-        .getTokens()
-        .catch(() => undefined);
-      return [id, Boolean(tokens?.accessToken)] as const;
-    })
-  );
-
-  return new Set(
-    results.filter(([, connected]) => connected).map(([id]) => id)
-  );
-}
-
-/**
- * Which providers already hold a token, independent of which one is active.
- *
- * `useProviderAuth` only tracks the active provider's connection, so the rest
- * are snapshotted straight from storage: once on mount, so the trigger's
- * count is accurate before the popover has ever been opened, and again every
- * time the popover opens, so a connect or disconnect that happened while it
- * was closed is reflected rather than assumed.
- */
-function useConnectedProviders(open: boolean) {
-  const [connectedIds, setConnectedIds] = useState<Set<string>>(new Set());
-  const { activeId, isConnected } = useProviderAuth();
-
-  useEffect(() => {
-    setConnectedIds((previous) => {
-      const next = new Set(previous);
-      if (isConnected) {
-        next.add(activeId);
-      } else {
-        next.delete(activeId);
-      }
-      return next;
-    });
-  }, [activeId, isConnected]);
-
-  const refresh = useCallback(() => {
-    let cancelled = false;
-
-    fetchConnectedIds().then((ids) => {
-      if (!cancelled) {
-        setConnectedIds(ids);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => refresh(), [refresh]);
-
-  useEffect(() => {
-    if (open) {
-      return refresh();
-    }
-  }, [open, refresh]);
-
-  return [connectedIds, setConnectedIds] as const;
-}
 
 function ManageProvidersRow({
   connected,
@@ -179,7 +117,31 @@ export function ManageProviders() {
     string | undefined
   >();
   const { activeId, disconnect, isConnected, setActiveId } = useProviderAuth();
-  const [connectedIds, setConnectedIds] = useConnectedProviders(open);
+
+  /**
+   * The same connection map the chat side reads, not a private copy.
+   *
+   * This popover used to keep its own snapshot and mutate it directly when a
+   * row was disconnected, which left the chat side — whose map only refreshes
+   * on `activeId`/`tokens` — still offering the revoked provider's models,
+   * and still holding a selection whose owner no longer had a token.
+   * Sharing one map means a disconnect here is a disconnect everywhere, and
+   * `disconnectProvider` is what puts it there.
+   */
+  const connected = useConnectedProviders();
+
+  /**
+   * Opening the popover is the one moment this list has to be right, and the
+   * only place that can tell is storage: a connect or disconnect that
+   * happened in another tab, or a token that expired out from under us, is
+   * invisible to React state. This asks every map to re-read rather than
+   * refreshing only this one, since they are all describing the same fact.
+   */
+  useEffect(() => {
+    if (open) {
+      notifyConnectionsChanged();
+    }
+  }, [open]);
 
   const handleConnect = useCallback(
     (id: string) => {
@@ -212,29 +174,24 @@ export function ManageProviders() {
     setPreviousActiveId(undefined);
   }, [dialogOpen, isConnected, previousActiveId, setActiveId]);
 
+  /**
+   * Every row disconnects the same way. The active provider needs one extra
+   * step — clearing `useProviderAuth`'s own `tokens`/`isConnected`, which
+   * nothing outside that hook can reach — but the revocation itself, and
+   * telling every connection map about it, is one path for all seven.
+   */
   const handleDisconnect = useCallback(
     (id: string) => {
       if (id === activeId) {
         disconnect();
-        return;
       }
 
-      setConnectedIds((previous) => {
-        const next = new Set(previous);
-        next.delete(id);
-        return next;
-      });
-
-      clientFor(id)
-        .logout()
-        .catch(() => {
-          // Local state is already cleared above; nothing left to do.
-        });
+      disconnectProvider(id);
     },
-    [activeId, disconnect, setConnectedIds]
+    [activeId, disconnect]
   );
 
-  const connectedCount = connectedIds.size;
+  const connectedCount = connected.size;
 
   return (
     <>
@@ -269,7 +226,7 @@ export function ManageProviders() {
           <div className="flex max-h-[min(60vh,22rem)] flex-col gap-0.5 overflow-y-auto">
             {PROVIDER_ORDER.map((id) => (
               <ManageProvidersRow
-                connected={connectedIds.has(id)}
+                connected={connected.has(id)}
                 id={id}
                 key={id}
                 onConnect={handleConnect}
