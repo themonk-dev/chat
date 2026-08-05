@@ -108,3 +108,10 @@ export const PROVIDER_ORDER = [
   "github-copilot",
   "qwen",
 ];
+
+/**
+ * Who a first visit is pointed at, before anything is stored — the name on the
+ * connect card and the dialog it opens. Derived so that leading the list is the
+ * whole of leading the app, rather than a second literal that can drift from it.
+ */
+export const [DEFAULT_PROVIDER_ID] = PROVIDER_ORDER;

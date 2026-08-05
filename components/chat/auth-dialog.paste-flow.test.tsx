@@ -110,16 +110,26 @@ function pasteClient(reply: () => Promise<TokenSet>) {
  * test is about.
  */
 function Harness() {
-  const [, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const { setActiveId } = useProviderAuth();
-  const pickGemini = useCallback(() => setActiveId("gemini"), [setActiveId]);
+
+  /**
+   * Moves the provider *then* opens, which is the order both real call sites
+   * use. Mounting it already open would leave the dialog on whichever provider
+   * a first visit lands on — and if that one is a device provider, the mount
+   * effect fires a device request this test never asked for.
+   */
+  const pickGemini = useCallback(() => {
+    setActiveId("gemini");
+    setOpen(true);
+  }, [setActiveId]);
 
   return (
     <>
       <button onClick={pickGemini} type="button">
         pick gemini
       </button>
-      <AuthDialog onOpenChange={setOpen} open={true} />
+      <AuthDialog onOpenChange={setOpen} open={open} />
     </>
   );
 }
