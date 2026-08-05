@@ -27,6 +27,14 @@ import { ProviderMark } from "./provider-mark";
 const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
 const REFOCUS_DELAY_MS = 50;
 
+/**
+ * OpenRouter's listing is its whole catalogue — 338 models — and it sits second
+ * in `PROVIDER_ORDER`, so unsliced it buries every provider after it under a
+ * scroll nobody reaches. Browsing shows a slice per provider; searching, which
+ * cmdk runs across every rendered row, shows all of them.
+ */
+const BROWSE_LIMIT = 8;
+
 function setCookie(name: string, value: string) {
   // biome-ignore lint/suspicious/noDocumentCookie: needed for client-side cookie setting
   document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${COOKIE_MAX_AGE_SECONDS}`;
@@ -99,6 +107,29 @@ function selectedModelFor(
   );
 }
 
+/**
+ * The selection is appended when the slice would have cut it: cmdk's default
+ * highlight points at that row, and dropping it loses the highlight and the
+ * tick beside the model the reader is actually on.
+ */
+function browseSlice(models: Model[], selectedModelId: string): Model[] {
+  if (models.length <= BROWSE_LIMIT) {
+    return models;
+  }
+
+  const shown = models.slice(0, BROWSE_LIMIT);
+
+  if (!(selectedModelId && models.some((m) => m.id === selectedModelId))) {
+    return shown;
+  }
+
+  const selected = shown.find((m) => m.id === selectedModelId);
+
+  return selected
+    ? shown
+    : [...shown, models.find((m) => m.id === selectedModelId) as Model];
+}
+
 function PureModelSelectorCompact({
   groups,
   selectedModelId,
@@ -111,6 +142,7 @@ function PureModelSelectorCompact({
   onModelChange?: (modelId: string, providerId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
   const { setActiveId } = useProviderAuth();
   const refocusRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
@@ -178,32 +210,50 @@ function PureModelSelectorCompact({
             : undefined
         }
       >
-        <ModelSelectorInput placeholder="Search models..." />
+        <ModelSelectorInput
+          onValueChange={setSearch}
+          placeholder="Search models..."
+          value={search}
+        />
         <ModelSelectorList>
           {groups.length === 0 ? (
             <ModelSelectorEmpty>
               Connect a provider to see its models.
             </ModelSelectorEmpty>
           ) : (
-            groups.map(({ providerId, models }) => (
-              <ModelSelectorGroup
-                heading={registry[providerId].label}
-                key={providerId}
-              >
-                {models.map((model) => (
-                  <ModelSelectorOption
-                    key={`${providerId}:${model.id}`}
-                    model={model}
-                    onSelect={handleSelect}
-                    providerId={providerId}
-                    selected={
-                      providerId === selectedProviderId &&
-                      model.id === selectedModelId
-                    }
-                  />
-                ))}
-              </ModelSelectorGroup>
-            ))
+            groups.map(({ providerId, models }) => {
+              const shown = search
+                ? models
+                : browseSlice(models, selectedModelId);
+
+              return (
+                <ModelSelectorGroup
+                  heading={registry[providerId].label}
+                  key={providerId}
+                >
+                  {shown.map((model) => (
+                    <ModelSelectorOption
+                      key={`${providerId}:${model.id}`}
+                      model={model}
+                      onSelect={handleSelect}
+                      providerId={providerId}
+                      selected={
+                        providerId === selectedProviderId &&
+                        model.id === selectedModelId
+                      }
+                    />
+                  ))}
+
+                  {shown.length < models.length ? (
+                    // A plain node, not an item: cmdk would score it against
+                    // the search and offer it as something to pick.
+                    <p className="px-2 py-1.5 text-[11px] text-muted-foreground">
+                      {models.length - shown.length} more — type to search
+                    </p>
+                  ) : null}
+                </ModelSelectorGroup>
+              );
+            })
           )}
         </ModelSelectorList>
       </ModelSelectorContent>
