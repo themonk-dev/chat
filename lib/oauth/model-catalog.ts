@@ -1,5 +1,8 @@
 export type Model = { id: string; name: string };
 
+/** One provider's models as the picker shows them: live if fetched, else static. */
+export type ModelGroup = { models: Model[]; providerId: string };
+
 /**
  * The first entry of each list is that provider's default — the model a reader
  * is put on, and billed for, the moment they connect. Order here is behaviour,

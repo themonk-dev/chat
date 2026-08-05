@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConnectedProviders } from "@/lib/oauth/connections";
+import type { ModelGroup } from "@/lib/oauth/model-catalog";
 import { nextSelection } from "@/lib/oauth/selection";
 
 type Selection = { modelId: string; providerId: string | undefined };
@@ -30,10 +31,12 @@ export function getSelectionProviderId(): string | undefined {
 export function useModelSelection({
   activeId,
   connected,
+  listings,
   setActiveId,
 }: {
   activeId: string;
   connected: ConnectedProviders;
+  listings: ModelGroup[];
   setActiveId: (id: string) => void;
 }) {
   const [currentModelId, setCurrentModelId] = useState("");
@@ -66,12 +69,14 @@ export function useModelSelection({
   /**
    * `"keep"` is the common case: merely looking at another provider must not
    * disturb a live selection. `"set"` also moves `activeId`, since a stale one
-   * would send the new model's id to the old provider's API.
+   * would send the new model's id to the old provider's API. Re-runs when
+   * `listings` refills, which is how a catalogue seed becomes a listed model.
    */
   useEffect(() => {
     const outcome = nextSelection({
       connected,
       currentModelId,
+      listings,
       owner: selectionRef.current.providerId,
     });
 
@@ -88,7 +93,7 @@ export function useModelSelection({
     if (outcome.kind === "clear") {
       apply("", undefined);
     }
-  }, [activeId, apply, connected, currentModelId, setActiveId]);
+  }, [activeId, apply, connected, currentModelId, listings, setActiveId]);
 
   return { currentModelId, select, selectionRef };
 }

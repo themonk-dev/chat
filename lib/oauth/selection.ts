@@ -1,5 +1,5 @@
 import type { ConnectedProviders } from "./connections";
-import { defaultModelFor } from "./model-catalog";
+import { defaultModelFor, type ModelGroup } from "./model-catalog";
 import { PROVIDER_ORDER } from "./registry";
 
 export type SelectionOutcome =
@@ -7,24 +7,67 @@ export type SelectionOutcome =
   | { kind: "clear" }
   | { kind: "set"; modelId: string; providerId: string };
 
+/** Empty until that provider's listing resolves, which is also the pre-fetch state. */
+function listed(listings: ModelGroup[], providerId: string) {
+  return (
+    listings.find((group) => group.providerId === providerId)?.models ?? []
+  );
+}
+
 /**
- * Given who is connected and which provider the selection belongs to, decides
- * what should change. `PROVIDER_ORDER` is the fallback order so the picker
- * falls back to the same list the dropdown already shows.
+ * The catalogue default wins while it is still on offer — those are chosen, not
+ * arbitrary (Flash before Pro on quota, Codex before GPT-5) — and only a listing
+ * that has dropped it hands over to its own first entry.
+ */
+export function preferredModel(
+  providerId: string,
+  models: { id: string }[]
+): string {
+  const curated = defaultModelFor(providerId);
+
+  if (models.length === 0 || models.some((model) => model.id === curated)) {
+    return curated;
+  }
+
+  return models[0].id;
+}
+
+/**
+ * Given who is connected, which provider the selection belongs to and what each
+ * one currently lists, decides what should change. `PROVIDER_ORDER` is the
+ * fallback order so the picker falls back to the same list the dropdown shows.
+ *
+ * `listings` arrives empty and refills when the live fetch lands, so a selection
+ * seeded from the static catalogue is re-pointed once the provider says what it
+ * actually offers.
  */
 export function nextSelection({
   connected,
   currentModelId,
+  listings = [],
   owner,
 }: {
   connected: ConnectedProviders;
   currentModelId: string;
+  listings?: ModelGroup[];
   owner: string | undefined;
 }): SelectionOutcome {
   const ownerStillConnected = owner !== undefined && connected.has(owner);
 
   if (currentModelId && ownerStillConnected) {
-    return { kind: "keep" };
+    const offered = listed(listings, owner);
+
+    // A model still on the list is the reader's own pick as often as ours, so
+    // it is never second-guessed. Only one the provider dropped moves.
+    if (offered.length === 0 || offered.some((m) => m.id === currentModelId)) {
+      return { kind: "keep" };
+    }
+
+    return {
+      kind: "set",
+      modelId: preferredModel(owner, offered),
+      providerId: owner,
+    };
   }
 
   const fallback = PROVIDER_ORDER.find((id) => connected.has(id));
@@ -32,7 +75,7 @@ export function nextSelection({
   if (fallback) {
     return {
       kind: "set",
-      modelId: defaultModelFor(fallback),
+      modelId: preferredModel(fallback, listed(listings, fallback)),
       providerId: fallback,
     };
   }

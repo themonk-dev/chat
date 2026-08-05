@@ -24,6 +24,7 @@ export function ChatShell() {
     setInput,
     isLoading,
     currentModelId,
+    modelGroups,
     setCurrentModelId,
   } = useActiveChat();
 
@@ -104,6 +105,7 @@ export function ChatShell() {
                 input={input}
                 isLoading={isLoading}
                 messages={messages}
+                modelGroups={modelGroups}
                 onCancelEdit={handleCancelEdit}
                 onModelChange={setCurrentModelId}
                 selectedModelId={currentModelId}

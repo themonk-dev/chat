@@ -2,7 +2,7 @@
 
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { ArrowUpIcon } from "lucide-react";
-import type { ConnectedProviders } from "@/lib/oauth/connections";
+import type { ModelGroup } from "@/lib/oauth/model-catalog";
 import type { ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
@@ -16,7 +16,7 @@ import { StopButton } from "./stop-button";
 
 export function ComposerActions({
   canSend,
-  connected,
+  groups,
   hasText,
   onModelChange,
   selectedModelId,
@@ -26,7 +26,7 @@ export function ComposerActions({
   stop,
 }: {
   canSend: boolean;
-  connected: ConnectedProviders;
+  groups: ModelGroup[];
   hasText: boolean;
   onModelChange?: (modelId: string, providerId: string) => void;
   selectedModelId: string;
@@ -41,7 +41,7 @@ export function ComposerActions({
     <PromptInputFooter className="px-3 pb-3">
       <PromptInputTools>
         <ModelSelectorCompact
-          connected={connected}
+          groups={groups}
           onModelChange={onModelChange}
           selectedModelId={selectedModelId}
         />

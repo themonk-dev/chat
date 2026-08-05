@@ -130,6 +130,7 @@ function Composer({ selectedModelId }: { selectedModelId: string }) {
       input="hello"
       isLoading={false}
       messages={noMessages}
+      modelGroups={[]}
       selectedModelId={selectedModelId}
       sendMessage={noopAsync}
       setAttachments={noop}

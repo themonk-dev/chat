@@ -122,6 +122,7 @@ function Harness() {
       input={input}
       isLoading={false}
       messages={noMessages}
+      modelGroups={[]}
       selectedModelId="openai/gpt-5"
       sendMessage={sendMessage}
       setAttachments={noop}

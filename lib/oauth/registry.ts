@@ -100,8 +100,8 @@ export function flowFor(
 }
 
 export const PROVIDER_ORDER = [
-  "openrouter",
   "openai",
+  "openrouter",
   "claude",
   "gemini",
   "xai",

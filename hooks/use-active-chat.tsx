@@ -20,11 +20,13 @@ import { useDataStream } from "@/components/chat/data-stream-provider";
 import { toast } from "@/components/chat/toast";
 import { useChatIdForPath, useStoredMessages } from "@/hooks/use-chat-id";
 import { useConnectedProviders } from "@/hooks/use-connected-providers";
+import { useModelGroups } from "@/hooks/use-model-groups";
 import { useModelSelection } from "@/hooks/use-model-selection";
 import { usePersistChat } from "@/hooks/use-persist-chat";
 import { useProviderAuth } from "@/hooks/use-provider-auth";
 import { failureMessage, isBlankReply } from "@/lib/chats/failure-message";
 import { deleteChat } from "@/lib/chats/store";
+import type { ModelGroup } from "@/lib/oauth/model-catalog";
 import { resolveRequest } from "@/lib/oauth/selection";
 import { OAuthChatTransport } from "@/lib/oauth/transport";
 import { describeSendFailure } from "@/lib/send-failure";
@@ -46,6 +48,8 @@ type ActiveChatContextValue = {
   setInput: Dispatch<SetStateAction<string>>;
   isLoading: boolean;
   currentModelId: string;
+  /** What each connected provider currently lists, live once its fetch lands. */
+  modelGroups: ModelGroup[];
   /** `providerId` defaults to the active provider; the picker always passes it. */
   setCurrentModelId: (id: string, providerId?: string) => void;
   clearChat: () => void;
@@ -71,9 +75,13 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
 
   const { activeId, tokens, setActiveId } = useProviderAuth();
   const connected = useConnectedProviders();
+  // Fetched here rather than in the picker so one listing feeds both: the
+  // dropdown's rows and the selection that has to name a model they contain.
+  const { groups: modelGroups } = useModelGroups(connected);
   const { currentModelId, select, selectionRef } = useModelSelection({
     activeId,
     connected,
+    listings: modelGroups,
     setActiveId,
   });
 
@@ -224,6 +232,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       input,
       isLoading: false,
       messages,
+      modelGroups,
       regenerate,
       sendMessage,
       setCurrentModelId: select,
@@ -244,6 +253,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       addToolApprovalResponse,
       input,
       currentModelId,
+      modelGroups,
       select,
     ]
   );
