@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { flowFor, isLoopbackOrigin, registry } from "./registry";
+import {
+  DEFAULT_PROVIDER_ID,
+  flowFor,
+  isLoopbackOrigin,
+  PROVIDER_ORDER,
+  registry,
+} from "./registry";
 
 /**
  * Claude and Gemini are the two entries in the registry that are not
@@ -85,6 +91,29 @@ describe("flowFor", () => {
 
       expect(flowFor(id, { hostname: "localhost" })).toBe(entry.flow);
       expect(flowFor(id, { hostname: "chat.themonk.dev" })).toBe(entry.flow);
+    }
+  });
+});
+
+/**
+ * The connect card names `registry[activeId].label`, and `activeId` starts at
+ * `DEFAULT_PROVIDER_ID`. Reordering the list used to leave that behind as a
+ * separate literal, so the card went on offering OpenRouter while the picker
+ * and the provider list had already moved on.
+ */
+describe("the provider a first visit lands on", () => {
+  it("is whichever one leads the list", () => {
+    expect(DEFAULT_PROVIDER_ID).toBe(PROVIDER_ORDER[0]);
+  });
+
+  it("is a provider the registry can name and the dialog can sign in", () => {
+    expect(registry[DEFAULT_PROVIDER_ID]).toBeDefined();
+    expect(registry[DEFAULT_PROVIDER_ID].label).toBe("ChatGPT");
+  });
+
+  it("leaves nothing in PROVIDER_ORDER that the registry does not know", () => {
+    for (const id of PROVIDER_ORDER) {
+      expect(registry[id]).toBeDefined();
     }
   });
 });

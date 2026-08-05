@@ -17,6 +17,7 @@ import { tabNameFor } from "@/lib/oauth/auth-attempt";
 import { handshakePopupReceiver } from "@/lib/oauth/popup-handshake";
 import {
   currentOrigin,
+  DEFAULT_PROVIDER_ID,
   flowFor,
   registry,
   SEVERING_AUTH_PAGES,
@@ -57,9 +58,9 @@ const ProviderAuthContext = createContext<ProviderAuthValue | null>(null);
  * client permits more on loopback than in production.
  */
 export function ProviderAuthProvider({ children }: { children: ReactNode }) {
-  const [activeId, setActive] = useState("openrouter");
+  const [activeId, setActive] = useState(DEFAULT_PROVIDER_ID);
   const [taggedTokens, setTaggedTokens] = useState<TaggedTokens>({
-    providerId: "openrouter",
+    providerId: DEFAULT_PROVIDER_ID,
     tokens: undefined,
   });
   const [pending, setPending] = useState<PendingAuth | undefined>(undefined);
