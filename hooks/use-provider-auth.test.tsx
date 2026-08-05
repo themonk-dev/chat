@@ -114,6 +114,29 @@ function makeStatefulClient(token: TokenSet): FakeClient {
   });
 }
 
+/**
+ * Which provider is active on mount belongs to `DEFAULT_PROVIDER_ID`, not to
+ * this file, and the hook reads `clientFor(activeId)` there — so an id no test
+ * named still has to answer rather than come back undefined.
+ */
+function serveClients(clients: Record<string, FakeClient>) {
+  const spares = new Map<string, FakeClient>();
+
+  vi.mocked(clientFor).mockImplementation((id: string) => {
+    const named = clients[id];
+
+    if (named) {
+      return named as never;
+    }
+
+    if (!spares.has(id)) {
+      spares.set(id, makeClient());
+    }
+
+    return spares.get(id) as never;
+  });
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((res) => {
@@ -169,9 +192,7 @@ describe("useProviderAuth", () => {
       openrouter: openrouterClient,
       xai: grokClient,
     };
-    vi.mocked(clientFor).mockImplementation(
-      (id: string) => clients[id] as never
-    );
+    serveClients(clients);
 
     const { result } = renderHook(() => useProviderAuth(), {
       wrapper: ProviderAuthProvider,
@@ -241,9 +262,7 @@ describe("useProviderAuth", () => {
       openrouter: openrouterClient,
       xai: grokClient,
     };
-    vi.mocked(clientFor).mockImplementation(
-      (id: string) => clients[id] as never
-    );
+    serveClients(clients);
 
     const { result } = renderHook(() => useProviderAuth(), {
       wrapper: ProviderAuthProvider,
@@ -294,9 +313,7 @@ describe("useProviderAuth", () => {
       openrouter: openrouterClient,
       xai: grokClient,
     };
-    vi.mocked(clientFor).mockImplementation(
-      (id: string) => clients[id] as never
-    );
+    serveClients(clients);
 
     const { result } = renderHook(() => useProviderAuth(), {
       wrapper: ProviderAuthProvider,
@@ -358,9 +375,7 @@ describe("useProviderAuth", () => {
       openrouter: openrouterClient,
       xai: grokClient,
     };
-    vi.mocked(clientFor).mockImplementation(
-      (id: string) => clients[id] as never
-    );
+    serveClients(clients);
 
     const { result } = renderHook(() => useProviderAuth(), {
       wrapper: ProviderAuthProvider,
@@ -409,9 +424,7 @@ describe("useProviderAuth", () => {
       openrouter: openrouterClient,
       xai: grokClient,
     };
-    vi.mocked(clientFor).mockImplementation(
-      (id: string) => clients[id] as never
-    );
+    serveClients(clients);
 
     const { result } = renderHook(() => useProviderAuth(), {
       wrapper: ProviderAuthProvider,
@@ -453,16 +466,17 @@ describe("useProviderAuth", () => {
     const clients: Record<string, FakeClient> = {
       openrouter: openrouterClient,
     };
-    vi.mocked(clientFor).mockImplementation(
-      (id: string) => clients[id] as never
-    );
+    serveClients(clients);
 
     const { result } = renderHook(() => useProviderAuth(), {
       wrapper: ProviderAuthProvider,
     });
 
-    // openrouter is the default active provider, and the only popup-flow
-    // one in the registry — no setActiveId needed.
+    // OpenRouter is the registry's only popup-flow provider, so the flow
+    // under test is reached by selecting it, not by it happening to lead.
+    act(() => {
+      result.current.setActiveId("openrouter");
+    });
     expect(result.current.activeId).toBe("openrouter");
 
     await act(async () => {
@@ -518,12 +532,14 @@ describe("useProviderAuth", () => {
     const clients: Record<string, FakeClient> = {
       openrouter: openrouterClient,
     };
-    vi.mocked(clientFor).mockImplementation(
-      (id: string) => clients[id] as never
-    );
+    serveClients(clients);
 
     const { result } = renderHook(() => useProviderAuth(), {
       wrapper: ProviderAuthProvider,
+    });
+
+    act(() => {
+      result.current.setActiveId("openrouter");
     });
 
     await act(async () => {
@@ -566,9 +582,7 @@ describe("useProviderAuth", () => {
       gemini: geminiClient,
       openrouter: openrouterClient,
     };
-    vi.mocked(clientFor).mockImplementation(
-      (id: string) => clients[id] as never
-    );
+    serveClients(clients);
 
     const { result } = renderHook(() => useProviderAuth(), {
       wrapper: ProviderAuthProvider,
@@ -633,9 +647,7 @@ describe("useProviderAuth", () => {
       gemini: geminiClient,
       openrouter: openrouterClient,
     };
-    vi.mocked(clientFor).mockImplementation(
-      (id: string) => clients[id] as never
-    );
+    serveClients(clients);
 
     const { result } = renderHook(() => useProviderAuth(), {
       wrapper: ProviderAuthProvider,
