@@ -2,11 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ConnectedProviders } from "@/lib/oauth/connections";
-import { type Model, modelsFor } from "@/lib/oauth/model-catalog";
+import {
+  type Model,
+  type ModelGroup,
+  modelsFor,
+} from "@/lib/oauth/model-catalog";
 import { fetchModelsFor } from "@/lib/oauth/models";
 import { PROVIDER_ORDER } from "@/lib/oauth/registry";
-
-export type ModelGroup = { providerId: string; models: Model[] };
 
 /**
  * Takes the connection map rather than calling `useConnectedProviders()` itself:

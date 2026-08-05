@@ -1,7 +1,11 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultModelFor } from "@/lib/oauth/model-catalog";
-import { nextSelection, resolveRequest } from "@/lib/oauth/selection";
+import {
+  nextSelection,
+  preferredModel,
+  resolveRequest,
+} from "@/lib/oauth/selection";
 import { useConnectedProviders } from "./use-connected-providers";
 
 /**
@@ -189,6 +193,109 @@ describe("nextSelection", () => {
         owner: "claude",
       })
     ).toEqual({ kind: "clear" });
+  });
+
+  it("puts a reader on ChatGPT when it is one of several connected", () => {
+    const connected = new Map([
+      ["qwen", "t1"],
+      ["openai", "t2"],
+      ["openrouter", "t3"],
+    ]);
+    expect(
+      nextSelection({ connected, currentModelId: "", owner: undefined })
+    ).toEqual({
+      kind: "set",
+      modelId: defaultModelFor("openai"),
+      providerId: "openai",
+    });
+  });
+
+  /**
+   * The bug this pair exists for: only `activeId` survives a reload, so the
+   * selection is re-seeded from the pinned catalogue. Anthropic answers
+   * undated ids where the catalogue pins dated ones, so the seed names a model
+   * the provider no longer offers — and used to stay there.
+   */
+  it("moves off a seeded model the provider's listing does not carry", () => {
+    expect(
+      nextSelection({
+        connected: new Map([["claude", "t"]]),
+        currentModelId: "claude-sonnet-4-5-20250929",
+        listings: [
+          {
+            models: [{ id: "claude-haiku-4-5", name: "Claude Haiku 4.5" }],
+            providerId: "claude",
+          },
+        ],
+        owner: "claude",
+      })
+    ).toEqual({
+      kind: "set",
+      modelId: "claude-haiku-4-5",
+      providerId: "claude",
+    });
+  });
+
+  it("leaves a model the listing still carries alone, since it may be the reader's own pick", () => {
+    expect(
+      nextSelection({
+        connected: new Map([["claude", "t"]]),
+        currentModelId: "claude-opus-4-1",
+        listings: [
+          {
+            models: [
+              { id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+              { id: "claude-opus-4-1", name: "Claude Opus 4.1" },
+            ],
+            providerId: "claude",
+          },
+        ],
+        owner: "claude",
+      })
+    ).toEqual({ kind: "keep" });
+  });
+
+  it("seeds a fresh connection from the listing rather than the catalogue", () => {
+    expect(
+      nextSelection({
+        connected: new Map([["xai", "t"]]),
+        currentModelId: "",
+        listings: [
+          {
+            models: [{ id: "grok-5", name: "Grok 5" }],
+            providerId: "xai",
+          },
+        ],
+        owner: undefined,
+      })
+    ).toEqual({ kind: "set", modelId: "grok-5", providerId: "xai" });
+  });
+});
+
+/**
+ * Five of the six live listings come back sorted by name, so their first entry
+ * is an alphabetical accident. The catalogue's first entry is not — it encodes
+ * quota (Flash before Pro) and surface (Codex before GPT-5) — so it is only
+ * given up when the provider stops offering it.
+ */
+describe("preferredModel", () => {
+  it("keeps the catalogue default while the listing still offers it", () => {
+    expect(
+      preferredModel("openai", [
+        { id: "gpt-5" },
+        { id: defaultModelFor("openai") },
+      ])
+    ).toBe(defaultModelFor("openai"));
+  });
+
+  it("takes the listing's first entry once the default is gone", () => {
+    expect(preferredModel("openai", [{ id: "gpt-6" }, { id: "gpt-5" }])).toBe(
+      "gpt-6"
+    );
+  });
+
+  it("falls back to the catalogue while no listing has arrived", () => {
+    expect(preferredModel("openai", [])).toBe(defaultModelFor("openai"));
   });
 });
 

@@ -18,6 +18,7 @@ import { useAutoFocus, useComposerDraft } from "@/hooks/use-composer-draft";
 import { useConnectedProviders } from "@/hooks/use-connected-providers";
 import { useProviderAuth } from "@/hooks/use-provider-auth";
 import { useSlashCommands } from "@/hooks/use-slash-commands";
+import type { ModelGroup } from "@/lib/oauth/model-catalog";
 import { registry } from "@/lib/oauth/registry";
 import { resolveRequest } from "@/lib/oauth/selection";
 import type { Attachment, ChatMessage } from "@/lib/types";
@@ -47,6 +48,7 @@ type MultimodalInputProps = {
     | (() => Promise<void>);
   className?: string;
   selectedModelId: string;
+  modelGroups: ModelGroup[];
   onModelChange?: (modelId: string, providerId: string) => void;
   editingMessage?: ChatMessage | null;
   onCancelEdit?: () => void;
@@ -67,6 +69,7 @@ function PureMultimodalInput({
   sendMessage,
   className,
   selectedModelId,
+  modelGroups,
   onModelChange,
   editingMessage,
   onCancelEdit,
@@ -235,7 +238,7 @@ function PureMultimodalInput({
 
         <ComposerActions
           canSend={canSend}
-          connected={connected}
+          groups={modelGroups}
           hasText={Boolean(input.trim())}
           onModelChange={onModelChange}
           selectedModelId={selectedModelId}

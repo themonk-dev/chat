@@ -14,10 +14,12 @@ import {
 } from "@/components/ai-elements/model-selector";
 import { Button } from "@/components/ui/button";
 import { getSelectionProviderId } from "@/hooks/use-active-chat";
-import { useModelGroups } from "@/hooks/use-model-groups";
 import { useProviderAuth } from "@/hooks/use-provider-auth";
-import type { ConnectedProviders } from "@/lib/oauth/connections";
-import { type Model, modelsFor } from "@/lib/oauth/model-catalog";
+import {
+  type Model,
+  type ModelGroup,
+  modelsFor,
+} from "@/lib/oauth/model-catalog";
 import { registry } from "@/lib/oauth/registry";
 import { cn } from "@/lib/utils";
 import { ProviderMark } from "./provider-mark";
@@ -80,7 +82,7 @@ function ModelSelectorOption({
  * ids differ from the pinned ones blanked the label the moment its 200 landed.
  */
 function selectedModelFor(
-  groups: ReturnType<typeof useModelGroups>["groups"],
+  groups: ModelGroup[],
   providerId: string | undefined,
   modelId: string
 ): Model | undefined {
@@ -98,17 +100,18 @@ function selectedModelFor(
 }
 
 function PureModelSelectorCompact({
-  connected,
+  groups,
   selectedModelId,
   onModelChange,
 }: {
-  connected: ConnectedProviders;
+  /** Passed in, not fetched: the chat provider already holds one listing, and
+   * a second fetch here could show rows the selection was never checked against. */
+  groups: ModelGroup[];
   selectedModelId: string;
   onModelChange?: (modelId: string, providerId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const { setActiveId } = useProviderAuth();
-  const { groups } = useModelGroups(connected);
   const refocusRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
   );

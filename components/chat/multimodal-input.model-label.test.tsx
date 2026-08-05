@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ConnectedProviders } from "@/lib/oauth/connections";
-import type { Model } from "@/lib/oauth/model-catalog";
+import type { Model, ModelGroup } from "@/lib/oauth/model-catalog";
 import { MultimodalInput } from "./multimodal-input";
 
 /**
@@ -40,6 +40,13 @@ const staticClaudeModels: Model[] = [
 /** What Anthropic's listing actually answers with: undated ids. */
 const liveClaudeModels: Model[] = [
   { id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+];
+
+const catalogueGroups: ModelGroup[] = [
+  { models: staticClaudeModels, providerId: "claude" },
+];
+const liveGroups: ModelGroup[] = [
+  { models: liveClaudeModels, providerId: "claude" },
 ];
 
 vi.mock("@/hooks/use-active-chat", () => ({
@@ -85,10 +92,6 @@ vi.mock("@/lib/chats/store", () => ({
   writeChat: () => undefined,
 }));
 
-vi.mock("@/lib/oauth/models", () => ({
-  fetchModelsFor: () => Promise.resolve(liveClaudeModels),
-}));
-
 vi.mock("@/lib/oauth/model-catalog", () => ({
   defaultModelFor: () => "claude-sonnet-4-5-20250929",
   modelsFor: (id: string) => (id === "claude" ? staticClaudeModels : []),
@@ -113,7 +116,13 @@ const noopAsync = () => Promise.resolve();
 const noAttachments: never[] = [];
 const noMessages: never[] = [];
 
-function Composer({ selectedModelId }: { selectedModelId: string }) {
+function Composer({
+  modelGroups,
+  selectedModelId,
+}: {
+  modelGroups: ModelGroup[];
+  selectedModelId: string;
+}) {
   return (
     <MultimodalInput
       attachments={noAttachments}
@@ -122,6 +131,7 @@ function Composer({ selectedModelId }: { selectedModelId: string }) {
       input="hello"
       isLoading={false}
       messages={noMessages}
+      modelGroups={modelGroups}
       selectedModelId={selectedModelId}
       sendMessage={noopAsync}
       setAttachments={noop}
@@ -155,7 +165,12 @@ describe("the model picker's label", () => {
   });
 
   it("keeps naming the selected model after the live listing replaces the catalogue", async () => {
-    renderComposer(<Composer selectedModelId="claude-sonnet-4-5-20250929" />);
+    const { rerender } = renderComposer(
+      <Composer
+        modelGroups={catalogueGroups}
+        selectedModelId="claude-sonnet-4-5-20250929"
+      />
+    );
 
     // Before the listing lands the static catalogue is what `groups` holds,
     // and the label has always been right at this point.
@@ -163,6 +178,14 @@ describe("the model picker's label", () => {
       "Claude Sonnet 4.5"
     );
 
+    rerender(
+      <TooltipProvider>
+        <Composer
+          modelGroups={liveGroups}
+          selectedModelId="claude-sonnet-4-5-20250929"
+        />
+      </TooltipProvider>
+    );
     await settle();
 
     expect(screen.getByTestId("model-selector").textContent).not.toContain(
@@ -180,7 +203,12 @@ describe("the model picker's label", () => {
    * "Select a model" is reserved for actually having no selection.
    */
   it("falls back to the selected id when neither list carries it", async () => {
-    renderComposer(<Composer selectedModelId="claude-some-unknown-model" />);
+    renderComposer(
+      <Composer
+        modelGroups={liveGroups}
+        selectedModelId="claude-some-unknown-model"
+      />
+    );
     await settle();
 
     expect(screen.getByTestId("model-selector").textContent).toContain(
@@ -190,7 +218,7 @@ describe("the model picker's label", () => {
 
   it("still says 'Select a model' when there is genuinely no selection", async () => {
     owner = undefined;
-    renderComposer(<Composer selectedModelId="" />);
+    renderComposer(<Composer modelGroups={liveGroups} selectedModelId="" />);
     await settle();
 
     expect(screen.getByTestId("model-selector").textContent).toContain(
